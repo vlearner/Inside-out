@@ -1,0 +1,13 @@
+# AutoGen AG2 - Multi-agent framework
+pyautogen>=0.2.0
+ag2>=0.2.0
+
+# Web UI Framework
+gradio>=4.0.0
+flask>=3.0.0
+
+# Environment and Configuration
+python-dotenv>=1.0.0
+
+# Utilities
+colorama>=0.4.6
