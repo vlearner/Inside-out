@@ -50,7 +50,15 @@ A fun multi-agent system inspired by Pixar's **Inside Out** movie, built with Au
 
 ### Running the Application
 
-#### Option 1: Web UI (Gradio) - Recommended! 🌟
+#### Option 1: Quick Demo 🎬
+
+```bash
+python demo.py
+```
+
+This runs a quick demonstration showing all features without needing a browser!
+
+#### Option 2: Web UI (Gradio) - Recommended! 🌟
 
 ```bash
 python -m ui.gradio_app
@@ -58,7 +66,7 @@ python -m ui.gradio_app
 
 Then open your browser to `http://localhost:7860`
 
-#### Option 2: Command Line Interface
+#### Option 3: Command Line Interface
 
 ```bash
 python main.py
@@ -115,6 +123,7 @@ Inside-out/
 ├── ui/
 │   └── gradio_app.py           # Web UI using Gradio
 ├── main.py                      # CLI entry point
+├── demo.py                      # Quick demo script
 ├── requirements.txt             # Python dependencies
 ├── .env.example                # Example environment configuration
 └── README.md                    # This file!
