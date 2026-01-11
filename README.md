@@ -58,7 +58,15 @@ python demo.py
 
 This runs a quick demonstration showing all features without needing a browser!
 
-#### Option 2: Web UI (Gradio) - Recommended! 🌟
+#### Option 2: Run Tests 🧪
+
+```bash
+python test_suite.py
+```
+
+Runs comprehensive tests to verify all components work correctly.
+
+#### Option 3: Web UI (Gradio) - Recommended! 🌟
 
 ```bash
 python -m ui.gradio_app
@@ -66,7 +74,7 @@ python -m ui.gradio_app
 
 Then open your browser to `http://localhost:7860`
 
-#### Option 3: Command Line Interface
+#### Option 4: Command Line Interface
 
 ```bash
 python main.py
@@ -124,6 +132,7 @@ Inside-out/
 │   └── gradio_app.py           # Web UI using Gradio
 ├── main.py                      # CLI entry point
 ├── demo.py                      # Quick demo script
+├── test_suite.py               # Comprehensive test suite
 ├── requirements.txt             # Python dependencies
 ├── .env.example                # Example environment configuration
 └── README.md                    # This file!
