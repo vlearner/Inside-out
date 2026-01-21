@@ -1,13 +1,92 @@
 """
 Personality Agents - Each representing a different emotion from Inside Out
+Includes Decision Agent for intelligent response routing
 """
 import os
+import logging
+import sys
+import json
 from typing import Dict, List, Optional
 from config.personalities import PERSONALITY_PROMPTS, MONITOR_PROMPT
+
+# Configure logging to show in terminal with more detail
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+    datefmt='%H:%M:%S',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("INSIDE-OUT")
+
+# Import Jan client for LLM integration
+try:
+    from utils.jan_client import JanClient, JanClientError
+    JAN_AVAILABLE = True
+    logger.info("✅ Jan AI client module loaded successfully")
+except ImportError as e:
+    JAN_AVAILABLE = False
+    logger.warning(f"❌ Jan client not available: {e} - using static responses")
+
+
+# Decision Agent prompt for analyzing who should respond
+DECISION_AGENT_PROMPT = """You are the Decision Agent for an Inside Out emotion chat.
+
+Your job is to analyze messages and decide which emotions should respond.
+
+Available emotions:
+- joy: Responds to positive, fun, happy, exciting topics
+- sadness: Responds to melancholic, missing, emotional depth topics
+- anger: Responds to unfair, frustrating, injustice topics
+- fear: Responds to risky, scary, dangerous, worrying topics
+- disgust: Responds to gross, tacky, cringe, fashion/taste topics
+
+Rules:
+1. NOT every emotion needs to respond to every message
+2. Pick only 1-3 emotions that are MOST relevant
+3. For neutral questions (like "favorite food"), only Joy should respond
+4. For negative topics, relevant emotions respond
+5. Return a JSON object with emotions as keys and boolean values
+
+Example:
+User: "What's your favorite pizza?"
+Response: {"joy": true, "sadness": false, "anger": false, "fear": false, "disgust": false}
+
+User: "I'm worried about climate change"
+Response: {"joy": false, "sadness": true, "anger": true, "fear": true, "disgust": false}
+
+User: "This trend is so cringe"
+Response: {"joy": false, "sadness": false, "anger": false, "fear": false, "disgust": true}
+
+ONLY respond with the JSON object, nothing else."""
 
 
 class PersonalityAgent:
     """Base class for personality agents"""
+    
+    # Shared Jan client instance
+    _jan_client = None
+    _connection_tested = False
+    
+    @classmethod
+    def get_jan_client(cls):
+        """Get or create shared Jan client"""
+        if cls._jan_client is None and JAN_AVAILABLE:
+            try:
+                logger.info("🔌 Initializing Jan AI client...")
+                cls._jan_client = JanClient()
+                
+                # Test connection on first use
+                if not cls._connection_tested:
+                    logger.info(f"🔗 Testing connection to Jan AI at {cls._jan_client.base_url}...")
+                    if cls._jan_client.test_connection():
+                        logger.info(f"✅ Connected to Jan AI! Model: {cls._jan_client.model_name}")
+                    else:
+                        logger.warning("⚠️ Jan AI connection test failed - server may not be running")
+                    cls._connection_tested = True
+                    
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize Jan client: {e}")
+        return cls._jan_client
     
     def __init__(self, personality_type: str, enabled: bool = True):
         self.personality_type = personality_type
@@ -20,34 +99,169 @@ class PersonalityAgent:
     
     def get_response(self, question: str, llm_config: Optional[Dict] = None) -> str:
         """
-        Generate a response based on this personality
-        This is a simple implementation - in a real AutoGen setup,
-        this would use the AutoGen agent framework
+        Generate a response based on this personality using Jan AI
+        Falls back to static response if Jan AI is unavailable
         """
         if not self.enabled:
             return None
-            
-        # For demo purposes, we'll create characteristic responses
-        # In production, this would use actual LLM with AutoGen
+        
+        # Try to get LLM response
+        jan_client = self.get_jan_client()
+        if jan_client:
+            try:
+                logger.info(f"🤖 [{self.name}] Sending request to Jan AI...")
+                messages = [
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": f"User says: \"{question}\"\n\nRespond in 1-2 SHORT sentences. Do NOT repeat their words. React with YOUR emotion."}
+                ]
+                
+                llm_response = jan_client.chat(messages)
+                logger.info(f"✅ [{self.name}] Got LLM response: {llm_response[:50]}...")
+                
+                response = f"{self.emoji} **{self.name}**: {llm_response}"
+                return response
+            except Exception as e:
+                logger.warning(f"⚠️ [{self.name}] Jan AI error: {e}")
+                logger.info(f"📝 [{self.name}] Falling back to static response")
+        else:
+            logger.info(f"📝 [{self.name}] No Jan client - using static response")
+        
+        # Fallback to static response
         response = f"{self.emoji} **{self.name}**: {self._generate_personality_response(question)}"
         return response
     
     def _generate_personality_response(self, question: str) -> str:
-        """Generate a personality-specific response (placeholder for LLM)"""
-        # This is a simplified version - real implementation would use AutoGen with LLM
+        """Generate a personality-specific fallback response"""
         personality_responses = {
-            "joy": f"Oh wow! That's such a FUN question! ✨ I'm so excited to think about this! Everything about this makes me happy! 🌟",
-            "sadness": f"Well... *sigh* ... I guess that's an interesting question, though it makes me feel a bit melancholy... 😔",
-            "anger": f"ARE YOU SERIOUS?! This question is... actually, you know what, this is making me think hard! 😤",
-            "fear": f"Oh no, oh no! That question makes me nervous! What if something goes wrong?! We need to be careful here! 😰",
-            "disgust": f"Ugh, really? *rolls eyes* Well, I SUPPOSE I can give my refined opinion on this... 💅"
+            "joy": f"Ooh, I love thinking about this! So exciting! ✨",
+            "sadness": f"*sigh* I guess that's something to think about... 😔",
+            "anger": f"Hmm, that's making me think! 😤",
+            "fear": f"Oh, that makes me a bit nervous to consider! 😰",
+            "disgust": f"Well, I have opinions about that... 💅"
         }
-        return personality_responses.get(self.personality_type, "Hmm, interesting question!")
+        return personality_responses.get(self.personality_type, "Hmm, interesting!")
     
     def toggle(self):
         """Toggle this personality on/off"""
         self.enabled = not self.enabled
         return self.enabled
+
+
+class DecisionAgent:
+    """
+    Decision Agent that analyzes messages and decides which personalities should respond.
+    Acts as a conductor/orchestrator for the emotion agents.
+    """
+    
+    def __init__(self):
+        self.name = "Decision"
+        self.system_prompt = DECISION_AGENT_PROMPT
+    
+    def get_jan_client(self):
+        """Get shared Jan client"""
+        return PersonalityAgent.get_jan_client()
+    
+    def analyze_message(self, message: str) -> Dict[str, bool]:
+        """
+        Analyze a message and decide which emotions should respond.
+        Returns dict of emotion -> should_respond
+        """
+        logger.info(f"🧠 [Decision Agent] Analyzing: '{message[:50]}...'")
+        
+        jan_client = self.get_jan_client()
+        
+        if jan_client:
+            try:
+                messages = [
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": f"User message: \"{message}\"\n\nWhich emotions should respond? Return ONLY JSON."}
+                ]
+                
+                response = jan_client.chat(messages, max_tokens=100)
+                logger.info(f"🧠 [Decision Agent] Raw response: {response}")
+                
+                # Parse JSON response
+                try:
+                    # Clean up response - extract JSON
+                    response = response.strip()
+                    if response.startswith("```"):
+                        response = response.split("```")[1]
+                        if response.startswith("json"):
+                            response = response[4:]
+                    
+                    decisions = json.loads(response)
+                    logger.info(f"🧠 [Decision Agent] Decisions: {decisions}")
+                    return decisions
+                except json.JSONDecodeError as e:
+                    logger.warning(f"⚠️ [Decision Agent] Failed to parse JSON: {e}")
+                    return self._fallback_analysis(message)
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ [Decision Agent] Error: {e}")
+                return self._fallback_analysis(message)
+        
+        return self._fallback_analysis(message)
+    
+    def _fallback_analysis(self, message: str) -> Dict[str, bool]:
+        """Fallback keyword-based analysis when LLM is unavailable"""
+        logger.info("📝 [Decision Agent] Using fallback keyword analysis")
+        
+        message_lower = message.lower()
+        decisions = {
+            "joy": False,
+            "sadness": False,
+            "anger": False,
+            "fear": False,
+            "disgust": False
+        }
+        
+        # Joy keywords - positive/fun
+        joy_keywords = ["favorite", "best", "love", "fun", "happy", "excited", "great", "amazing", "pizza", "food", "like", "enjoy"]
+        
+        # Sadness keywords
+        sadness_keywords = ["sad", "miss", "lonely", "wish", "lost", "remember", "gone", "cry"]
+        
+        # Anger keywords
+        anger_keywords = ["unfair", "hate", "angry", "frustrat", "stupid", "ridiculous", "worst", "terrible"]
+        
+        # Fear keywords
+        fear_keywords = ["scary", "afraid", "worried", "dangerous", "risk", "nervous", "what if"]
+        
+        # Disgust keywords
+        disgust_keywords = ["gross", "ew", "yuck", "cringe", "tacky", "ugly", "embarrassing", "fashion"]
+        
+        # Check each emotion
+        for keyword in joy_keywords:
+            if keyword in message_lower:
+                decisions["joy"] = True
+                break
+        
+        for keyword in sadness_keywords:
+            if keyword in message_lower:
+                decisions["sadness"] = True
+                break
+        
+        for keyword in anger_keywords:
+            if keyword in message_lower:
+                decisions["anger"] = True
+                break
+        
+        for keyword in fear_keywords:
+            if keyword in message_lower:
+                decisions["fear"] = True
+                break
+        
+        for keyword in disgust_keywords:
+            if keyword in message_lower:
+                decisions["disgust"] = True
+                break
+        
+        # Default: if nothing matched, just Joy responds to neutral questions
+        if not any(decisions.values()):
+            decisions["joy"] = True
+        
+        logger.info(f"📝 [Decision Agent] Fallback decisions: {decisions}")
+        return decisions
 
 
 class MonitorAgent:
@@ -62,9 +276,6 @@ class MonitorAgent:
         Check if a question is appropriate for this fun system
         Returns: (is_approved, message)
         """
-        # Simple keyword-based checking for demo
-        # In production, this would use AutoGen with LLM
-        
         serious_keywords = [
             'depressed', 'suicide', 'kill', 'die', 'death', 'war', 'politics',
             'election', 'medical', 'doctor', 'sick', 'disease', 'legal', 'lawyer',
@@ -77,18 +288,17 @@ class MonitorAgent:
         # Check for serious keywords
         for keyword in serious_keywords:
             if keyword in question_lower:
-                return False, f"🚦 **Monitor**: Hey there! This seems a bit too serious for our fun zone! This is all about lighthearted fun! How about asking something silly like 'If animals could talk, which would be the rudest?' 😄"
+                return False, f"🚦 **Monitor**: This seems too serious for our fun zone! Try something silly instead! 😄"
         
-        # Check if question is too short or unclear
-        if len(question.strip()) < 10:
-            return False, f"🚦 **Monitor**: Ooh, that's a bit too short! Give me something fun to work with! Try asking something like 'What superpower would be the most inconvenient in daily life?' 🦸"
+        # Check if question is too short
+        if len(question.strip()) < 5:
+            return False, f"🚦 **Monitor**: Give me something fun to work with! Try a fun question! 🦸"
         
-        # Question seems fun and appropriate
-        return True, "✅ Question approved!"
+        return True, "✅ Approved!"
 
 
 class MultiAgentSystem:
-    """Orchestrates multiple personality agents"""
+    """Orchestrates multiple personality agents with Decision Agent"""
     
     def __init__(self):
         self.agents: Dict[str, PersonalityAgent] = {
@@ -99,11 +309,18 @@ class MultiAgentSystem:
             "disgust": PersonalityAgent("disgust", enabled=True),
         }
         self.monitor = MonitorAgent()
-        
-    def get_responses(self, question: str, llm_config: Optional[Dict] = None) -> Dict:
+        self.decision_agent = DecisionAgent()
+    
+    def get_responses(self, question: str, mentioned: List[str] = None, llm_config: Optional[Dict] = None) -> Dict:
         """
-        Process a question through monitor and active agents
-        Returns dict with approval status and responses
+        Process a question through monitor, decision agent, and relevant personality agents
+        
+        Args:
+            question: The user's message
+            mentioned: List of emotions that were @mentioned (bypass decision agent)
+            llm_config: Optional LLM configuration
+            
+        Returns: dict with approval status and responses
         """
         # First, check with monitor
         is_approved, monitor_message = self.monitor.check_question(question, llm_config)
@@ -112,17 +329,28 @@ class MultiAgentSystem:
             return {
                 "approved": False,
                 "monitor_message": monitor_message,
-                "responses": []
+                "responses": [],
+                "decisions": {}
             }
         
-        # Get responses from all enabled agents
+        # If there are @mentions, those emotions respond directly
+        if mentioned and len(mentioned) > 0:
+            logger.info(f"📌 Direct @mentions: {mentioned} - bypassing Decision Agent")
+            decisions = {e: (e in mentioned) for e in self.agents.keys()}
+        else:
+            # Use Decision Agent to determine who should respond
+            decisions = self.decision_agent.analyze_message(question)
+        
+        # Get responses from decided agents
         responses = []
-        for agent_type, agent in self.agents.items():
-            if agent.enabled:
+        for agent_type, should_respond in decisions.items():
+            agent = self.agents.get(agent_type)
+            if agent and agent.enabled and should_respond:
                 response = agent.get_response(question, llm_config)
                 if response:
                     responses.append({
                         "agent": agent.name,
+                        "emotion": agent_type,
                         "emoji": agent.emoji,
                         "color": agent.color,
                         "response": response
@@ -131,7 +359,8 @@ class MultiAgentSystem:
         return {
             "approved": True,
             "monitor_message": monitor_message,
-            "responses": responses
+            "responses": responses,
+            "decisions": decisions
         }
     
     def toggle_agent(self, agent_type: str) -> bool:
