@@ -27,6 +27,19 @@ except ImportError as e:
     JAN_AVAILABLE = False
     logger.warning(f"❌ Jan client not available: {e} - using static responses")
 
+# Import weather tool for weather lookups
+try:
+    from tools.weather_tool import (
+        get_weather,
+        is_weather_query,
+        extract_location_from_message
+    )
+    WEATHER_AVAILABLE = True
+    logger.info("✅ Weather tool loaded successfully")
+except ImportError as e:
+    WEATHER_AVAILABLE = False
+    logger.warning(f"⚠️ Weather tool not available: {e}")
+
 
 # Decision Agent prompt for analyzing who should respond
 DECISION_AGENT_PROMPT = """You are the Decision Agent for an Inside Out emotion chat.
@@ -34,7 +47,7 @@ DECISION_AGENT_PROMPT = """You are the Decision Agent for an Inside Out emotion 
 Your job is to analyze messages and decide which emotions should respond.
 
 Available emotions:
-- joy: Responds to positive, fun, happy, exciting topics
+- joy: Responds to positive, fun, happy, exciting topics AND neutral informational queries (like weather, facts)
 - sadness: Responds to melancholic, missing, emotional depth topics
 - anger: Responds to unfair, frustrating, injustice topics
 - fear: Responds to risky, scary, dangerous, worrying topics
@@ -43,12 +56,16 @@ Available emotions:
 Rules:
 1. NOT every emotion needs to respond to every message
 2. Pick only 1-3 emotions that are MOST relevant
-3. For neutral questions (like "favorite food"), only Joy should respond
-4. For negative topics, relevant emotions respond
-5. Return a JSON object with emotions as keys and boolean values
+3. For neutral questions (like "favorite food" or "what's the weather"), Joy should respond
+4. For weather queries ("what's the weather in...", "how hot is it"), Joy should respond
+5. For negative topics, relevant emotions respond
+6. Return a JSON object with emotions as keys and boolean values
 
 Example:
 User: "What's your favorite pizza?"
+Response: {"joy": true, "sadness": false, "anger": false, "fear": false, "disgust": false}
+
+User: "What's the weather in New York?"
 Response: {"joy": true, "sadness": false, "anger": false, "fear": false, "disgust": false}
 
 User: "I'm worried about climate change"
@@ -101,18 +118,39 @@ class PersonalityAgent:
         """
         Generate a response based on this personality using Jan AI
         Falls back to static response if Jan AI is unavailable
+        Includes weather data when user asks about weather
         """
         if not self.enabled:
             return None
+        
+        # Check if this is a weather query and get weather data
+        weather_context = ""
+        if WEATHER_AVAILABLE and is_weather_query(question):
+            location = extract_location_from_message(question)
+            if location:
+                logger.info(f"🌤️ [{self.name}] Weather query detected for: {location}")
+                weather_data = get_weather(location)
+                weather_context = f"\n\nCurrent weather information:\n{weather_data}"
+                logger.info(f"🌤️ [{self.name}] Got weather data")
+            else:
+                logger.info(f"🌤️ [{self.name}] Weather query but no location specified")
         
         # Try to get LLM response
         jan_client = self.get_jan_client()
         if jan_client:
             try:
                 logger.info(f"🤖 [{self.name}] Sending request to Jan AI...")
+                
+                # Build user message with optional weather context
+                user_message = f'User says: "{question}"'
+                if weather_context:
+                    user_message += weather_context
+                    user_message += "\n\nUse the weather information above to respond naturally. "
+                user_message += "\n\nRespond in 1-2 SHORT sentences. Do NOT repeat their words. React with YOUR emotion."
+                
                 messages = [
                     {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": f"User says: \"{question}\"\n\nRespond in 1-2 SHORT sentences. Do NOT repeat their words. React with YOUR emotion."}
+                    {"role": "user", "content": user_message}
                 ]
                 
                 llm_response = jan_client.chat(messages)
@@ -126,8 +164,11 @@ class PersonalityAgent:
         else:
             logger.info(f"📝 [{self.name}] No Jan client - using static response")
         
-        # Fallback to static response
-        response = f"{self.emoji} **{self.name}**: {self._generate_personality_response(question)}"
+        # Fallback to static response (include weather info if available)
+        fallback = self._generate_personality_response(question)
+        if weather_context:
+            fallback = self._generate_weather_response(weather_context) or fallback
+        response = f"{self.emoji} **{self.name}**: {fallback}"
         return response
     
     def _generate_personality_response(self, question: str) -> str:
@@ -140,6 +181,17 @@ class PersonalityAgent:
             "disgust": f"Well, I have opinions about that... 💅"
         }
         return personality_responses.get(self.personality_type, "Hmm, interesting!")
+    
+    def _generate_weather_response(self, weather_info: str) -> Optional[str]:
+        """Generate a personality-specific response about weather"""
+        weather_responses = {
+            "joy": f"Oh wow, let me tell you about the weather! 🌈 {weather_info.split(chr(10))[0] if weather_info else ''} How exciting!",
+            "sadness": f"*looks out window* The weather... it makes me feel things. {weather_info.split(chr(10))[0] if weather_info else ''} 😢",
+            "anger": f"You want to know about the weather?! Fine! {weather_info.split(chr(10))[0] if weather_info else ''} 😤",
+            "fear": f"Oh no, the weather! What if it changes?! {weather_info.split(chr(10))[0] if weather_info else ''} Be careful out there! 😰",
+            "disgust": f"Ugh, weather talk? Really? Fine. {weather_info.split(chr(10))[0] if weather_info else ''} 💅"
+        }
+        return weather_responses.get(self.personality_type)
     
     def toggle(self):
         """Toggle this personality on/off"""
@@ -215,8 +267,8 @@ class DecisionAgent:
             "disgust": False
         }
         
-        # Joy keywords - positive/fun
-        joy_keywords = ["favorite", "best", "love", "fun", "happy", "excited", "great", "amazing", "pizza", "food", "like", "enjoy"]
+        # Joy keywords - positive/fun (includes weather - neutral questions go to Joy)
+        joy_keywords = ["favorite", "best", "love", "fun", "happy", "excited", "great", "amazing", "pizza", "food", "like", "enjoy", "weather", "temperature", "forecast", "sunny", "rain"]
         
         # Sadness keywords
         sadness_keywords = ["sad", "miss", "lonely", "wish", "lost", "remember", "gone", "cry"]
