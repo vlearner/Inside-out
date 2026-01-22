@@ -319,6 +319,128 @@ class TestWeatherConfig:
 
 
 # ============================================================================
+# AG2 Weather Agent Tests
+# ============================================================================
+
+from tools.weather_tool import get_weather_forecast, WEATHER_TOOL_SCHEMA
+
+
+class TestWeatherForecastTool:
+    """Tests for the AG2-compatible get_weather_forecast tool"""
+
+    @patch('tools.weather_tool._get_client')
+    def test_get_weather_forecast_today(self, mock_get_client):
+        """Test get_weather_forecast for today's weather"""
+        mock_client = MagicMock()
+        mock_client.get_current_weather.return_value = MOCK_CURRENT_WEATHER
+        mock_get_client.return_value = mock_client
+
+        result = get_weather_forecast(city="New York", date="today")
+        
+        assert result["success"] is True
+        assert result["city"] == "New York"
+        assert result["error"] is None
+        assert "temperature" in result
+        assert result["temperature"]["current_f"] == 41.0
+        assert result["conditions"] == "Partly cloudy"
+
+    @patch('tools.weather_tool._get_client')
+    def test_get_weather_forecast_tomorrow(self, mock_get_client):
+        """Test get_weather_forecast for tomorrow's weather"""
+        mock_client = MagicMock()
+        mock_client.get_forecast.return_value = MOCK_FORECAST
+        mock_get_client.return_value = mock_client
+
+        result = get_weather_forecast(city="London", date="tomorrow")
+        
+        assert result["success"] is True
+        assert result["error"] is None
+        assert "temperature" in result
+        # Tomorrow is the second day in forecast
+        assert result["temperature"]["high_f"] == 48.0
+
+    @patch('tools.weather_tool._get_client')
+    def test_get_weather_forecast_error_handling(self, mock_get_client):
+        """Test that errors are handled gracefully"""
+        mock_client = MagicMock()
+        mock_client.get_current_weather.side_effect = WeatherClientError("API Error")
+        mock_get_client.return_value = mock_client
+
+        result = get_weather_forecast(city="InvalidCity", date="today")
+        
+        assert result["success"] is False
+        assert result["error"] is not None
+        assert "API Error" in result["error"]
+
+    def test_weather_tool_schema_structure(self):
+        """Test that the tool schema has correct structure for AG2"""
+        assert WEATHER_TOOL_SCHEMA["type"] == "function"
+        assert "function" in WEATHER_TOOL_SCHEMA
+        
+        func_schema = WEATHER_TOOL_SCHEMA["function"]
+        assert func_schema["name"] == "get_weather_forecast"
+        assert "description" in func_schema
+        assert "parameters" in func_schema
+        
+        params = func_schema["parameters"]
+        assert params["type"] == "object"
+        assert "city" in params["properties"]
+        assert "date" in params["properties"]
+        assert "city" in params["required"]
+
+    def test_weather_tool_schema_descriptions(self):
+        """Test that schema has helpful descriptions for LLM"""
+        func_schema = WEATHER_TOOL_SCHEMA["function"]
+        
+        # Description should mention key weather terms
+        description = func_schema["description"].lower()
+        assert "weather" in description
+        assert "forecast" in description
+        assert "temperature" in description
+        
+        # City parameter should have description
+        city_prop = func_schema["parameters"]["properties"]["city"]
+        assert "description" in city_prop
+        assert "city" in city_prop["description"].lower()
+
+
+class TestWeatherAgentImports:
+    """Test that weather agent module can be imported"""
+
+    def test_weather_agent_imports(self):
+        """Test that weather agent components can be imported"""
+        try:
+            from agents.weather_agent import (
+                WeatherAgentSystem,
+                create_weather_agent,
+                create_weather_user_proxy,
+                WEATHER_AGENT_SYSTEM_MESSAGE
+            )
+            assert WeatherAgentSystem is not None
+            assert create_weather_agent is not None
+            assert create_weather_user_proxy is not None
+            assert WEATHER_AGENT_SYSTEM_MESSAGE is not None
+        except ImportError as e:
+            pytest.fail(f"Failed to import weather agent: {e}")
+
+    def test_weather_agent_system_message_content(self):
+        """Test that system message has proper instructions"""
+        from agents.weather_agent import WEATHER_AGENT_SYSTEM_MESSAGE
+        
+        msg_lower = WEATHER_AGENT_SYSTEM_MESSAGE.lower()
+        
+        # Should instruct to use tool for weather queries
+        assert "get_weather_forecast" in msg_lower
+        
+        # Should instruct not to hallucinate
+        assert "never" in msg_lower or "must" in msg_lower
+        
+        # Should mention weather-related terms
+        assert "weather" in msg_lower
+        assert "temperature" in msg_lower
+
+
+# ============================================================================
 # Run Tests
 # ============================================================================
 
