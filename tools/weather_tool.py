@@ -361,10 +361,14 @@ def get_weather_forecast(city: str, date: str = "today") -> Dict[str, Any]:
                         target_day = day_data
                         break
                 
-                # If exact match not found, try partial match or use first available
+                # If exact match not found, use first available with a warning
                 if target_day is None and forecast_days:
-                    # Default to first forecast day if date not found
                     target_day = forecast_days[0]
+                    # Add a note that we're using a different date
+                    result["alerts"].append(
+                        f"Note: Requested date '{date}' not available, "
+                        f"showing forecast for {target_day.get('date', 'nearest available date')}"
+                    )
             
             if target_day:
                 day = target_day.get("day", {})
@@ -386,14 +390,16 @@ def get_weather_forecast(city: str, date: str = "today") -> Dict[str, Any]:
                 }
                 result["humidity"] = day.get("avghumidity")
                 result["conditions"] = condition.get("text", "Unknown")
-                result["alerts"] = []
                 
                 # Check for rain/snow chances
+                # Using 30% as threshold as it represents "fair chance" of precipitation
+                # Based on common meteorological conventions
+                PRECIPITATION_ALERT_THRESHOLD = 30  # percent
                 rain_chance = day.get("daily_chance_of_rain", 0)
                 snow_chance = day.get("daily_chance_of_snow", 0)
-                if rain_chance > 30:
+                if rain_chance > PRECIPITATION_ALERT_THRESHOLD:
                     result["alerts"].append(f"{rain_chance}% chance of rain")
-                if snow_chance > 30:
+                if snow_chance > PRECIPITATION_ALERT_THRESHOLD:
                     result["alerts"].append(f"{snow_chance}% chance of snow")
                 
                 result["success"] = True

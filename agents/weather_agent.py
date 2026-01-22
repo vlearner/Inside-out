@@ -4,7 +4,7 @@ Uses AG2/AutoGen 2 ConversableAgent with tool calling capabilities
 """
 import logging
 import sys
-from typing import Dict, List, Optional, Any, Annotated
+from typing import Dict, List, Optional, Any
 
 from autogen import ConversableAgent, AssistantAgent, UserProxyAgent
 
@@ -170,7 +170,7 @@ class WeatherAgentSystem:
         
         logger.info("✅ WeatherAgentSystem initialized")
     
-    def chat(self, message: str) -> str:
+    def chat(self, message: str, max_turns: int = 5) -> str:
         """
         Process a user message and return the agent's response.
         
@@ -179,6 +179,7 @@ class WeatherAgentSystem:
         
         Args:
             message: The user's input message
+            max_turns: Maximum conversation turns (default: 5, allows for tool call + response)
             
         Returns:
             The agent's response as a string
@@ -191,7 +192,7 @@ class WeatherAgentSystem:
             result = self.user_proxy.initiate_chat(
                 self.assistant,
                 message=message,
-                max_turns=3,
+                max_turns=max_turns,
                 silent=False
             )
             
@@ -199,10 +200,16 @@ class WeatherAgentSystem:
             # The chat history contains all messages including tool calls
             if result.chat_history:
                 # Find the last assistant message that's not a tool call
+                # Tool calls have function_call or tool_calls in the message
                 for msg in reversed(result.chat_history):
                     if msg.get("role") == "assistant" or msg.get("name") == "WeatherAssistant":
                         content = msg.get("content", "")
-                        if content and not content.startswith("{"):
+                        # Skip messages that are tool calls (have function_call or tool_calls)
+                        # or are function results
+                        is_tool_call = msg.get("function_call") or msg.get("tool_calls")
+                        is_function_result = msg.get("role") == "function"
+                        
+                        if content and not is_tool_call and not is_function_result:
                             logger.info(f"✅ Generated response: {content[:100]}...")
                             return content
                 
