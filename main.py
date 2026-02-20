@@ -3,11 +3,60 @@ Main entry point for Inside Out Multi-Agent System
 """
 import sys
 import os
+import logging
 
 # Add the project root to the path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agents import MultiAgentSystem
+from utils.jan_client import JanClient, JanClientError
+
+# Configure logging so the user sees timestamps and levels in the terminal
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("INSIDE-OUT")
+
+
+def check_jan_connection() -> bool:
+    """
+    Attempt to reach the Jan AI server.
+    Logs a clear warning when unavailable so the user knows
+    all responses will be local / static fallbacks.
+
+    Returns:
+        True if Jan AI is reachable, False otherwise.
+    """
+    try:
+        client = JanClient()
+        connected = client.test_connection()
+        if connected:
+            logger.info(
+                f"✅ Jan AI connected — model: {client.model_name}  url: {client.base_url}"
+            )
+        else:
+            logger.warning(
+                "⚠️  Jan AI server is NOT reachable at %s. "
+                "All responses will use LOCAL static fallbacks (no LLM).",
+                client.base_url,
+            )
+        return connected
+    except JanClientError as exc:
+        logger.warning(
+            "⚠️  Jan AI client error: %s. "
+            "All responses will use LOCAL static fallbacks (no LLM).",
+            exc,
+        )
+        return False
+    except Exception as exc:
+        logger.warning(
+            "⚠️  Unexpected error checking Jan AI: %s. "
+            "All responses will use LOCAL static fallbacks (no LLM).",
+            exc,
+        )
+        return False
 
 
 def print_banner():
@@ -42,7 +91,16 @@ def print_status(agent_system):
 def main():
     """Main CLI interface"""
     print_banner()
-    
+
+    # ── Connection check ────────────────────────────────────────────────────
+    jan_online = check_jan_connection()
+    if not jan_online:
+        print(
+            "\n⚠️  Jan AI is OFFLINE — responses are LOCAL static fallbacks.\n"
+            "   Start the Jan AI server and restart this script for LLM replies.\n"
+        )
+    # ────────────────────────────────────────────────────────────────────────
+
     agent_system = MultiAgentSystem()
     
     while True:
@@ -51,7 +109,7 @@ def main():
             
             if not question:
                 continue
-            
+
             # Handle commands
             if question.lower() in ['quit', 'exit']:
                 print("\n👋 Thanks for chatting with the Inside Out crew! Goodbye! 🎬\n")

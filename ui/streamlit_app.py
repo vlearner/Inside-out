@@ -14,6 +14,7 @@ import re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents import MultiAgentSystem
+from utils.jan_client import JanClient, JanClientError
 
 # Page configuration
 st.set_page_config(
@@ -63,6 +64,49 @@ EMOTION_FRIENDS = {
 }
 
 
+# Available tools configuration
+AVAILABLE_TOOLS = {
+    "weather": {
+        "name": "Weather Lookup",
+        "emoji": "🌤️",
+        "description": "Get current weather and forecasts for any location",
+        "module": "tools.weather_tool",
+    },
+}
+
+
+def test_ai_model_connection() -> dict:
+    """
+    Test connectivity to the Jan AI server and return status details.
+
+    Returns:
+        dict with keys: connected (bool), model (str), base_url (str), error (str|None)
+    """
+    try:
+        client = JanClient()
+        connected = client.test_connection()
+        return {
+            "connected": connected,
+            "model": client.model_name,
+            "base_url": client.base_url,
+            "error": None if connected else "Server is not responding",
+        }
+    except JanClientError as exc:
+        return {
+            "connected": False,
+            "model": "N/A",
+            "base_url": "N/A",
+            "error": str(exc),
+        }
+    except Exception as exc:
+        return {
+            "connected": False,
+            "model": "N/A",
+            "base_url": "N/A",
+            "error": str(exc),
+        }
+
+
 def parse_mentions(message: str) -> tuple[list, str]:
     """
     Parse @mentions from message.
@@ -99,6 +143,9 @@ def initialize_session_state():
     
     if "pending_responses" not in st.session_state:
         st.session_state.pending_responses = []
+
+    if "enabled_tools" not in st.session_state:
+        st.session_state.enabled_tools = {tool: True for tool in AVAILABLE_TOOLS}
 
 
 def get_single_response(agent_system, emotion: str, message: str):
@@ -140,6 +187,46 @@ def main():
             st.session_state.pending_responses = []
             st.rerun()
         
+        # --- Test AI Model Connection ---
+        if st.button("🔌 Test AI Model Connection", use_container_width=True):
+            with st.spinner("Testing connection to Jan AI server..."):
+                status = test_ai_model_connection()
+            if status["connected"]:
+                st.success(
+                    f"✅ Connected!\n\n"
+                    f"**Model:** {status['model']}\n\n"
+                    f"**URL:** {status['base_url']}"
+                )
+            else:
+                st.error(
+                    f"❌ Connection failed\n\n"
+                    f"**Error:** {status['error']}\n\n"
+                    f"Make sure Jan AI server is running."
+                )
+
+        st.divider()
+
+        # --- Tools Section ---
+        st.subheader("🛠️ Tools")
+        st.write("Enable/disable agent tools:")
+
+        for tool_key, tool_config in AVAILABLE_TOOLS.items():
+            st.session_state.enabled_tools[tool_key] = st.checkbox(
+                f"{tool_config['emoji']} {tool_config['name']}",
+                value=st.session_state.enabled_tools.get(tool_key, True),
+                key=f"tool_{tool_key}",
+                help=tool_config["description"],
+            )
+
+        # Show tool connection status when a tool is enabled
+        for tool_key, enabled in st.session_state.enabled_tools.items():
+            if enabled:
+                tool_config = AVAILABLE_TOOLS[tool_key]
+                st.caption(f"  ↳ {tool_config['emoji']} {tool_config['name']} — active")
+            else:
+                tool_config = AVAILABLE_TOOLS[tool_key]
+                st.caption(f"  ↳ {tool_config['emoji']} {tool_config['name']} — disabled")
+
         st.divider()
         st.subheader("💬 How to Chat")
         st.markdown("""
@@ -216,9 +303,11 @@ def main():
         
         time.sleep(pending.get("delay", 1.0))
         
-        agent_system = st.session_state.agent_system
-        response_text = get_single_response(agent_system, emotion, pending["message"])
-        
+        # Prefer the already-computed response; only re-fetch if it's absent
+        response_text = pending.get("cached_response") or get_single_response(
+            st.session_state.agent_system, emotion, pending["message"]
+        )
+
         typing_placeholder.empty()
         
         if response_text:
@@ -282,11 +371,18 @@ def main():
             emotion = resp.get("emotion", resp["agent"].lower())
             if st.session_state.active_friends.get(emotion, False):
                 config = EMOTION_FRIENDS.get(emotion, {})
+                # Strip the raw response text (remove "emoji **Name**: " prefix)
+                response_text = resp.get("response", "")
+                if "**:" in response_text:
+                    parts = response_text.split("**:", 1)
+                    if len(parts) > 1:
+                        response_text = parts[1].strip()
                 pending.append({
                     "emotion": emotion,
                     "delay": config.get("base_delay", 1.0),
-                    "message": user_input,
-                    "was_mentioned": emotion in (mentioned or [])
+                    "message": clean_message,   # @mention-stripped message
+                    "was_mentioned": emotion in (mentioned or []),
+                    "cached_response": response_text,  # use this; skip re-fetch
                 })
         
         # Sort: mentioned first, then by delay

@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("JAN-CLIENT")
 
 
 class JanClientError(Exception):
@@ -27,13 +27,49 @@ class JanClient:
     methods for chat completions with retry logic and error handling.
     """
 
-    def __init__(self):
-        """Initialize the Jan.ai client with configuration from environment"""
+    # Default fallback values — override via env vars or constructor kwargs
+    # NOTE: DEFAULT_API_KEY is intentionally empty.
+    #       Set JAN_API_KEY in your .env file (see .env.example).
+    DEFAULT_BASE_URL = "http://127.0.0.1:1337/v1"
+    DEFAULT_API_KEY = ""          # no key hardcoded — must come from .env
+    DEFAULT_MODEL = "Meta-Llama-3_1-8B-Instruct_Q4_K_M"
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ):
+        """
+        Initialize the Jan.ai client.
+
+        Priority order for each value:
+          1. Explicit constructor argument
+          2. Environment variable  (JAN_BASE_URL / JAN_API_KEY / JAN_MODEL_NAME)
+          3. Class-level default constant
+
+        This means you can override any value in tests or scripts without
+        touching environment variables:
+
+            client = JanClient(api_key="my-key", model_name="mistral-7b")
+        """
         load_dotenv()
 
-        self.base_url = os.getenv("JAN_BASE_URL", "http://localhost:1337/v1")
-        self.api_key = os.getenv("JAN_API_KEY", "")
-        self.model_name = os.getenv("JAN_MODEL_NAME", "llama-3.1-8b-instruct")
+        self.base_url = (
+            base_url
+            if base_url is not None
+            else os.getenv("JAN_BASE_URL", self.DEFAULT_BASE_URL)
+        )
+        self.api_key = (
+            api_key
+            if api_key is not None
+            else os.getenv("JAN_API_KEY", self.DEFAULT_API_KEY)
+        )
+        self.model_name = (
+            model_name
+            if model_name is not None
+            else os.getenv("JAN_MODEL_NAME", self.DEFAULT_MODEL)
+        )
         self.temperature = float(os.getenv("TEMPERATURE", "0.8"))
         self.max_tokens = int(os.getenv("MAX_TOKENS", "500"))
 
@@ -91,15 +127,21 @@ class JanClient:
         last_error = None
         for attempt in range(max_retries):
             try:
-                logger.debug(f"Making request to {url}, attempt {attempt + 1}/{max_retries}")
+                logger.info(
+                    f"│  POST {url} (attempt {attempt + 1}/{max_retries}, "
+                    f"model={payload['model']})"
+                )
                 response = requests.post(
                     url,
                     json=payload,
                     headers=headers,
                     timeout=60
                 )
+                logger.info(f"│  HTTP {response.status_code} received")
                 response.raise_for_status()
-                return response.json()
+                data = response.json()
+                logger.info(f"│  Response OK — keys: {list(data.keys())}")
+                return data
 
             except requests.exceptions.ConnectionError as e:
                 last_error = e
@@ -114,7 +156,8 @@ class JanClient:
                 last_error = e
                 logger.error(f"HTTP error: {e}")
                 # Don't retry on client errors (4xx)
-                if response.status_code < 500:
+                status_code = e.response.status_code if e.response is not None else 500
+                if status_code < 500:
                     raise JanClientError(f"API error: {e}")
             except Exception as e:
                 last_error = e
@@ -136,40 +179,51 @@ class JanClient:
         max_tokens: Optional[int] = None
     ) -> str:
         """
-        Send a chat completion request and return the response content
-
-        Args:
-            messages: List of message dicts with 'role' and 'content'
-            temperature: Override default temperature
-            max_tokens: Override default max tokens
-
-        Returns:
-            The assistant's response content as a string
+        Send a chat completion request and return the response content.
         """
+        logger.info(
+            f"┌── chat() called — model={self.model_name}, "
+            f"messages={len(messages)}, temp={temperature or self.temperature}, "
+            f"max_tokens={max_tokens or self.max_tokens}"
+        )
         response = self._make_request(messages, temperature, max_tokens)
 
         try:
             content = response["choices"][0]["message"]["content"]
+            logger.info(f"└── chat() ✅ response content ({len(content)} chars)")
             return content.strip()
         except (KeyError, IndexError) as e:
-            logger.error(f"Unexpected response format: {response}")
+            logger.error(f"└── chat() ❌ Unexpected response format: {response}")
             raise JanClientError(f"Unexpected response format: {e}")
 
     def test_connection(self) -> bool:
         """
-        Test the connection to Jan.ai server
+        Test the connection to Jan.ai server by calling GET /models.
+        Sends the configured api_key so the server does not reject with 401.
 
         Returns:
             True if connection is successful, False otherwise
         """
         try:
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
             response = requests.get(
                 f"{self.base_url}/models",
-                timeout=5
+                headers=headers,
+                timeout=5,
             )
             response.raise_for_status()
             logger.info("Successfully connected to Jan.ai")
             return True
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else "N/A"
+            logger.warning(
+                f"Could not connect to Jan.ai: {e} "
+                f"(HTTP {status} — check your JAN_API_KEY / api_key)"
+            )
+            return False
         except Exception as e:
             logger.warning(f"Could not connect to Jan.ai: {e}")
             return False
@@ -196,7 +250,7 @@ def get_llm_config(
 
     base_url = os.getenv("JAN_BASE_URL", "http://localhost:1337/v1")
     api_key = os.getenv("JAN_API_KEY", "")
-    model_name = os.getenv("JAN_MODEL_NAME", "llama-3.1-8b-instruct")
+    model_name = os.getenv("JAN_MODEL_NAME", "Meta-Llama-3_1-8B-Instruct_Q4_K_M")
     default_temp = float(os.getenv("TEMPERATURE", "0.8"))
     default_max_tokens = int(os.getenv("MAX_TOKENS", "500"))
 

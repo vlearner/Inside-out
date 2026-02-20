@@ -1,5 +1,7 @@
-# Environment files
+# Environment files — NEVER commit real credentials
 .env
+.env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -49,3 +51,5 @@ logs/
 .coverage
 htmlcov/
 
+# Stray scaffold directories
+path/
