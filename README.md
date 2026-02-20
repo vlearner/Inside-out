@@ -66,13 +66,14 @@ python test_suite.py
 
 Runs comprehensive tests to verify all components work correctly.
 
-#### Option 3: Streamlit UI (Jan AI) - Recommended! 🌟
+#### Option 3: Streamlit UI (Jan AI)
 
 ```bash
 streamlit run ui/streamlit_app.py
 ```
 
-Ensure your local Jan AI server is running first; the UI connects to it for LLM responses.
+Ensure your local Jan AI server is running first (download from https://jan.ai); the UI connects to
+`http://127.0.0.1:1337/v1` by default (see `.env.example` for overrides).
 
 Then open your browser to `http://localhost:8501`
 
@@ -86,7 +87,7 @@ Then open your browser to `http://localhost:7860`
 
 #### Option 5: Command Line Interface (Jan AI)
 
-Start your local Jan AI server, then run:
+Start your local Jan AI server (see `.env.example` for the default `JAN_BASE_URL`), then run:
 
 ```bash
 python main.py
