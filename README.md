@@ -73,9 +73,10 @@ streamlit run ui/streamlit_app.py
 ```
 
 Ensure your local Jan AI server is running first (download from https://jan.ai).
+Jan AI provides the local LLM backend for responses.
 The UI connects to `http://127.0.0.1:1337/v1` by default (see `.env.example` for overrides).
 
-Then open your browser to `http://localhost:8501`
+Then open your browser to `http://localhost:8501`.
 
 #### Option 4: Web UI (Gradio)
 
@@ -83,7 +84,7 @@ Then open your browser to `http://localhost:8501`
 python -m ui.gradio_app
 ```
 
-Then open your browser to `http://localhost:7860`
+Then open your browser to `http://localhost:7860`.
 
 #### Option 5: Command Line Interface (Jan AI)
 
