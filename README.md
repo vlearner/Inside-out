@@ -7,7 +7,7 @@ A fun multi-agent system inspired by Pixar's **Inside Out** movie, built with Au
 - 🎨 **5 Unique Personality Agents** - Each emotion has its own distinct personality and response style
 - 🎮 **Interactive UI** - Toggle personalities on/off in real-time
 - 🚦 **Monitor Agent** - Ensures only fun, lighthearted questions are processed
-- 💬 **Multiple Interfaces** - CLI plus Streamlit/Gradio web UIs
+- 💬 **Multiple Interfaces** - CLI and web UIs (Streamlit/Gradio)
 - 🎬 **Inside Out Inspired** - Authentic personality traits from the beloved Pixar characters
 
 ## 🎭 The Personalities
@@ -66,15 +66,15 @@ python test_suite.py
 
 Runs comprehensive tests to verify all components work correctly.
 
-#### Option 3: Streamlit UI (Jan AI)
+#### Option 3: Streamlit UI (requires Jan AI server)
+
+Start your local Jan AI server first (download from https://jan.ai). Jan AI provides the local
+LLM backend for responses and defaults to `http://127.0.0.1:1337/v1`
+(see `.env.example` for overrides).
 
 ```bash
 streamlit run ui/streamlit_app.py
 ```
-
-Ensure your local Jan AI server is running first (download from https://jan.ai).
-Jan AI provides the local LLM backend for responses.
-The UI connects to `http://127.0.0.1:1337/v1` by default (see `.env.example` for overrides).
 
 Then open your browser to `http://localhost:8501`.
 
@@ -86,7 +86,7 @@ python -m ui.gradio_app
 
 Then open your browser to `http://localhost:7860`.
 
-#### Option 5: Command Line Interface (Jan AI)
+#### Option 5: Command Line Interface (requires Jan AI server)
 
 Start your local Jan AI server (see `.env.example` for the default `JAN_BASE_URL`), then run:
 
