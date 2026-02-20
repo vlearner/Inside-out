@@ -76,7 +76,8 @@ LLM backend for responses and defaults to `http://127.0.0.1:1337/v1`
 streamlit run ui/streamlit_app.py
 ```
 
-Then open your browser to `http://localhost:8501`.
+Then open your browser to `http://localhost:8501`. Streamlit is the primary chat UI;
+Gradio below is a lightweight alternative.
 
 #### Option 4: Web UI (Gradio)
 
