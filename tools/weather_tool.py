@@ -3,13 +3,14 @@ Weather Tool for Agents
 Provides agent-compatible functions for weather lookups
 """
 import logging
-from typing import Dict, Any, Optional, Union
+import re
+from typing import Dict, Any, Optional
 
 from utils.weather_client import WeatherClient, WeatherClientError
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("WEATHER-TOOL")
 
 # Singleton client instance
 _weather_client: Optional[WeatherClient] = None
@@ -125,35 +126,39 @@ def format_forecast_response(
 
 def get_weather(location: str) -> str:
     """
-    Get current weather for a location - main function for agents
-
-    This is the primary function that agents should call when
-    they need weather information.
+    Get current weather for a location - main function for agents.
 
     Args:
         location: City name, coordinates, or postal code
-            Examples: "New York", "London, UK", "90210"
 
     Returns:
         Formatted weather string on success, or error message on failure
     """
-    logger.info(f"Agent requesting weather for: {location}")
+    logger.info(f"┌── get_weather(\"{location}\") called")
 
     try:
+        logger.info(f"│  Initializing weather client...")
         client = _get_client()
+        logger.info(f"│  Client ready — API key configured: {'YES' if client.api_key else 'NO'}")
+
+        logger.info(f"│  Calling WeatherAPI for \"{location}\"...")
         weather_data = client.get_current_weather(location)
+        logger.info(f"│  Raw API response received (keys: {list(weather_data.keys())})")
+
         formatted = format_weather_response(weather_data)
-        logger.info(f"Successfully retrieved weather for: {location}")
+        logger.info(f"│  Formatted response:\n│    {formatted.replace(chr(10), chr(10) + '│    ')}")
+        logger.info(f"└── get_weather(\"{location}\") ✅ SUCCESS")
         return formatted
 
     except WeatherClientError as e:
         error_msg = f"Could not get weather for '{location}': {str(e)}"
-        logger.warning(error_msg)
+        logger.warning(f"│  ❌ WeatherClientError: {e}")
+        logger.warning(f"└── get_weather(\"{location}\") FAILED")
         return error_msg
 
     except Exception as e:
-        error_msg = f"Unexpected error getting weather: {str(e)}"
-        logger.error(error_msg)
+        logger.error(f"│  ❌ Unexpected error: {type(e).__name__}: {e}")
+        logger.error(f"└── get_weather(\"{location}\") FAILED")
         return "Sorry, I couldn't retrieve the weather information right now."
 
 
@@ -209,52 +214,78 @@ def is_weather_query(message: str) -> bool:
 
     for keyword in weather_keywords:
         if keyword in message_lower:
-            logger.debug(f"Weather query detected: keyword '{keyword}' found")
+            logger.info(f"is_weather_query → TRUE (matched keyword \"{keyword}\" in \"{message_lower[:60]}\")")
             return True
 
+    logger.info(f"is_weather_query → FALSE (no weather keywords in \"{message_lower[:60]}\")")
     return False
 
 
 def extract_location_from_message(message: str) -> Optional[str]:
     """
-    Try to extract a location from a weather-related message
+    Try to extract a location from a weather-related message.
+
+    Handles patterns like:
+      "what is current weather at Minneapolis MN?"
+      "weather in London, UK"
+      "what's the temperature in Paris?"
 
     Args:
         message: User message that may contain a location
 
     Returns:
-        Extracted location or None if not found
+        Extracted location string, or None if not found
     """
-    # Common patterns for weather questions
+    logger.info(f"extract_location — input: \"{message}\"")
+
+    # Ordered from most-specific to least-specific so the first match wins
     patterns = [
+        "current weather at ",
+        "current weather in ",
+        "current weather for ",
+        "what is the weather at ",
+        "what is the weather in ",
+        "what's the weather at ",
+        "what's the weather in ",
+        "how's the weather in ",
+        "how's the weather at ",
+        "weather at ",
         "weather in ",
         "weather for ",
-        "weather at ",
         "forecast for ",
         "forecast in ",
+        "temperature at ",
         "temperature in ",
-        "how's the weather in ",
-        "what's the weather in ",
-        "what is the weather in ",
     ]
 
     message_lower = message.lower()
 
     for pattern in patterns:
         if pattern in message_lower:
-            # Extract text after the pattern
             start_idx = message_lower.index(pattern) + len(pattern)
             location = message[start_idx:].strip()
 
-            # Clean up the location - remove trailing punctuation
+            # Remove trailing punctuation
             location = location.rstrip("?!.,")
 
-            # Take only the first few words (location names are usually short)
+            # Take only the first 4 words (location names are usually short)
             words = location.split()[:4]
             location = " ".join(words)
 
             if location:
-                logger.debug(f"Extracted location: '{location}'")
+                logger.info(f"extract_location — MATCHED pattern \"{pattern}\" → location: \"{location}\"")
                 return location
 
+    # --- Fallback: look for a capitalised word/phrase after a weather keyword ---
+    fallback_match = re.search(
+        r'\b(?:weather|temperature|forecast|rain|snow|sunny|cold|hot|warm)\b'
+        r'.{0,20}?\b([A-Z][a-zA-Z]+(?:\s+[A-Z]{2})?)',
+        message,
+    )
+    if fallback_match:
+        location = fallback_match.group(1).strip()
+        logger.info(f"extract_location — FALLBACK regex matched → location: \"{location}\"")
+        return location
+
+    logger.warning(f"extract_location — NO location found in: \"{message}\"")
     return None
