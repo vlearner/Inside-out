@@ -72,8 +72,8 @@ Runs comprehensive tests to verify all components work correctly.
 streamlit run ui/streamlit_app.py
 ```
 
-Ensure your local Jan AI server is running first (download from https://jan.ai); the UI connects to
-`http://127.0.0.1:1337/v1` by default (see `.env.example` for overrides).
+Ensure your local Jan AI server is running first (download from https://jan.ai).
+The UI connects to `http://127.0.0.1:1337/v1` by default (see `.env.example` for overrides).
 
 Then open your browser to `http://localhost:8501`
 
