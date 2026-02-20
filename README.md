@@ -7,7 +7,7 @@ A fun multi-agent system inspired by Pixar's **Inside Out** movie, built with Au
 - 🎨 **5 Unique Personality Agents** - Each emotion has its own distinct personality and response style
 - 🎮 **Interactive UI** - Toggle personalities on/off in real-time
 - 🚦 **Monitor Agent** - Ensures only fun, lighthearted questions are processed
-- 💬 **Multiple Interfaces** - Both CLI and web UI (Gradio) available
+- 💬 **Multiple Interfaces** - CLI plus Streamlit/Gradio web UIs
 - 🎬 **Inside Out Inspired** - Authentic personality traits from the beloved Pixar characters
 
 ## 🎭 The Personalities
@@ -66,7 +66,17 @@ python test_suite.py
 
 Runs comprehensive tests to verify all components work correctly.
 
-#### Option 3: Web UI (Gradio) - Recommended! 🌟
+#### Option 3: Streamlit UI (Jan AI) - Recommended! 🌟
+
+```bash
+streamlit run ui/streamlit_app.py
+```
+
+Ensure your local Jan AI server is running first; the UI connects to it for LLM responses.
+
+Then open your browser to `http://localhost:8501`
+
+#### Option 4: Web UI (Gradio)
 
 ```bash
 python -m ui.gradio_app
@@ -74,7 +84,9 @@ python -m ui.gradio_app
 
 Then open your browser to `http://localhost:7860`
 
-#### Option 4: Command Line Interface
+#### Option 5: Command Line Interface (Jan AI)
+
+Start your local Jan AI server, then run:
 
 ```bash
 python main.py
@@ -129,7 +141,8 @@ Inside-out/
 │   ├── __init__.py
 │   └── personalities.py         # Personality prompts and configs
 ├── ui/
-│   └── gradio_app.py           # Web UI using Gradio
+│   ├── gradio_app.py           # Web UI using Gradio
+│   └── streamlit_app.py        # Streamlit chat UI (Jan AI)
 ├── main.py                      # CLI entry point
 ├── demo.py                      # Quick demo script
 ├── test_suite.py               # Comprehensive test suite
@@ -144,6 +157,7 @@ Inside-out/
 
 - **AutoGen (AG2)** - Multi-agent framework
 - **Gradio** - Web UI framework
+- **Streamlit** - Chat UI framework
 - **Python 3.8+** - Core language
 
 ### Architecture
