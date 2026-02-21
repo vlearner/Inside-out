@@ -7,7 +7,7 @@ A fun multi-agent system inspired by Pixar's **Inside Out** movie, built with Au
 - 🎨 **5 Unique Personality Agents** - Each emotion has its own distinct personality and response style
 - 🎮 **Interactive UI** - Toggle personalities on/off in real-time
 - 🚦 **Monitor Agent** - Ensures only fun, lighthearted questions are processed
-- 💬 **Multiple Interfaces** - Both CLI and web UI (Gradio) available
+- 💬 **Multiple Interfaces** - Both CLI and web UI (Streamlit) available
 - 🎬 **Inside Out Inspired** - Authentic personality traits from the beloved Pixar characters
 
 ## 🎭 The Personalities
@@ -66,13 +66,13 @@ python test_suite.py
 
 Runs comprehensive tests to verify all components work correctly.
 
-#### Option 3: Web UI (Gradio) - Recommended! 🌟
+#### Option 3: Web UI (Streamlit) - Recommended! 🌟
 
 ```bash
-python -m ui.gradio_app
+streamlit run ui/streamlit_app.py
 ```
 
-Then open your browser to `http://localhost:7860`
+Then open your browser to `http://localhost:8501`
 
 #### Option 4: Command Line Interface
 
@@ -84,9 +84,9 @@ python main.py
 
 ### Web UI
 
-1. **Ask a Fun Question** - Type your lighthearted question in the text box
-2. **Toggle Personalities** - Use the checkboxes to turn emotions on/off
-3. **Get Responses** - Click "Get Responses!" to see how each active emotion reacts!
+1. **Ask a Fun Question** - Type your lighthearted question in the chat input box
+2. **Toggle Personalities** - Use the checkboxes in the sidebar to turn emotions on/off
+3. **Get Responses** - Press Enter or click the send button to see how each active emotion reacts!
 
 ### CLI
 
@@ -129,7 +129,7 @@ Inside-out/
 │   ├── __init__.py
 │   └── personalities.py         # Personality prompts and configs
 ├── ui/
-│   └── gradio_app.py           # Web UI using Gradio
+│   └── streamlit_app.py        # Web UI using Streamlit
 ├── main.py                      # CLI entry point
 ├── demo.py                      # Quick demo script
 ├── test_suite.py               # Comprehensive test suite
@@ -143,7 +143,7 @@ Inside-out/
 ### Built With
 
 - **AutoGen (AG2)** - Multi-agent framework
-- **Gradio** - Web UI framework
+- **Streamlit** - Web UI framework
 - **Python 3.8+** - Core language
 
 ### Architecture
@@ -153,7 +153,7 @@ The system consists of:
 1. **Personality Agents** - Five emotion-based agents with unique prompts
 2. **Monitor Agent** - Filters questions to ensure appropriateness
 3. **Multi-Agent System** - Orchestrates agent interactions
-4. **UI Layer** - Gradio web interface and CLI
+4. **UI Layer** - Streamlit web interface and CLI
 
 ## 🎯 Future Enhancements
 
