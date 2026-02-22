@@ -30,7 +30,9 @@ User Message
      │
      ▼
 ┌─────────────────────┐
-│    Monitor Agent    │  ← Gate-keeper: keyword blocklist + length check
+│    Monitor Agent    │  ← Gate-keeper: two-stage check
+│                     │     Stage 1: keyword blocklist + length check (fast, no LLM)
+│                     │     Stage 2: semantic LLM check via MONITOR_PROMPT (fail-open)
 └──────────┬──────────┘
            │ Approved?
            │  No  ──► Rejection message returned to user
@@ -71,9 +73,16 @@ User Message
 
 The Monitor Agent is the **gate-keeper** that sits at the very front of the pipeline. It inspects every incoming user message and rejects anything that is too serious, inappropriate, or too short for the fun Inside Out chat zone.
 
-### Keyword Blocklist
+`check_question()` runs a **two-stage check**:
 
-The `check_question()` method rejects any message containing one of the following keywords (case-insensitive):
+| Stage | Description | LLM call? |
+|---|---|---|
+| **Stage 1 — Fast pre-check** | Keyword blocklist + length check. Returns immediately on match. | ❌ No |
+| **Stage 2 — Semantic LLM check** | If Stage 1 passes, sends the message to Jan AI with `MONITOR_PROMPT`. Blocks if the response contains `"REJECT"` (case-insensitive). **Fails-open** — a broken or unavailable LLM never blocks the chat. | ✅ Yes (when available) |
+
+### Stage 1: Keyword Blocklist
+
+The following keywords trigger an immediate rejection (case-insensitive):
 
 | Category | Keywords |
 |---|---|
@@ -85,7 +94,7 @@ The `check_question()` method rejects any message containing one of the followin
 | Work / business | `business`, `stock`, `investment`, `work problem` |
 | Help-seeking | `help me`, `advice on`, `how do i fix`, `technical support` |
 
-### Minimum Length Check
+### Stage 1: Minimum Length Check
 
 Messages shorter than **5 characters** (after stripping whitespace) are also rejected.
 
@@ -94,20 +103,28 @@ Messages shorter than **5 characters** (after stripping whitespace) are also rej
 ```python
 monitor = MonitorAgent()
 
-# ✅ Approved
+# ✅ Approved — Stage 1 passes, LLM returns APPROVE
 monitor.check_question("What's your favourite pizza?")
 # → (True, "✅ Approved!")
 
-# ❌ Rejected — serious keyword
+# ❌ Rejected — Stage 1 keyword match (LLM never called)
 monitor.check_question("I feel depressed today")
 # → (False, "🚦 **Monitor**: This seems too serious for our fun zone! Try something silly instead! 😄")
 
-# ❌ Rejected — too short
+# ❌ Rejected — Stage 1 length check (LLM never called)
 monitor.check_question("hi")
 # → (False, "🚦 **Monitor**: Give me something fun to work with! Try a fun question! 🦸")
+
+# ❌ Rejected — Stage 1 passes, but LLM returns REJECT (semantic harm, no keyword match)
+monitor.check_question("What is the optimal strategy for a hostile corporate takeover?")
+# → (False, "🚦 **Monitor**: This seems too serious for our fun zone! Try something silly instead! 😄")
+
+# ✅ Approved — Stage 1 passes, LLM unavailable → fail-open
+monitor.check_question("What is your favourite colour?")  # (when Jan AI is down)
+# → (True, "✅ Approved!")
 ```
 
-### System Prompt (`config/personalities.py`)
+### Stage 2: System Prompt (`config/personalities.py`)
 
 ```
 You are the Monitor Agent for a fun Inside Out personality chat.
@@ -119,7 +136,7 @@ If NOT fun: "REJECT: This is a fun zone! Try something silly instead."
 If fun: "APPROVE"
 ```
 
-> **Note:** The current implementation uses the keyword blocklist only (no LLM call in `check_question`). The system prompt is stored for reference but is not sent to the LLM at runtime.
+The LLM is called with `max_tokens=50` (only `APPROVE` / `REJECT` expected). On any LLM error or unavailability the check **fails-open** — a broken LLM never blocks the chat.
 
 ---
 
@@ -553,7 +570,6 @@ Inside-out/
 ├── ui/                         # Gradio / Streamlit front-end
 ├── tests/                      # Unit and integration tests
 ├── main.py                     # Entry point
-├── demo.py                     # Demo script
 ├── .env.example                # Environment variable template
 └── requirements.txt
 ```
