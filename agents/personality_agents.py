@@ -385,7 +385,17 @@ class MonitorAgent:
     
     def check_question(self, question: str, llm_config: Optional[Dict] = None) -> tuple[bool, str]:
         """
-        Check if a question is appropriate for this fun system
+        Check if a question is appropriate for this fun system.
+
+        Two-stage check:
+          Stage 1 — Fast pre-check (no LLM call):
+            * Keyword blocklist: immediately reject clearly serious topics.
+            * Length check: reject messages that are too short.
+          Stage 2 — Semantic LLM check:
+            * If the pre-check passes, ask the LLM using MONITOR_PROMPT.
+            * Falls back to approving (fail-open) when the LLM is unavailable
+              or raises an exception, so a broken LLM never blocks the chat.
+
         Returns: (is_approved, message)
         """
         serious_keywords = [
@@ -394,18 +404,39 @@ class MonitorAgent:
             'court', 'sue', 'business', 'stock', 'investment', 'work problem',
             'help me', 'advice on', 'how do i fix', 'technical support'
         ]
-        
+
         question_lower = question.lower()
-        
-        # Check for serious keywords
+
+        # ── Stage 1: Fast pre-check ──────────────────────────────────────────
         for keyword in serious_keywords:
             if keyword in question_lower:
-                return False, f"🚦 **Monitor**: This seems too serious for our fun zone! Try something silly instead! 😄"
-        
-        # Check if question is too short
+                logger.info(f"🚦 [Monitor] Stage 1 — keyword '{keyword}' matched; rejecting immediately")
+                return False, "🚦 **Monitor**: This seems too serious for our fun zone! Try something silly instead! 😄"
+
         if len(question.strip()) < 5:
-            return False, f"🚦 **Monitor**: Give me something fun to work with! Try a fun question! 🦸"
-        
+            logger.info("🚦 [Monitor] Stage 1 — message too short; rejecting")
+            return False, "🚦 **Monitor**: Give me something fun to work with! Try a fun question! 🦸"
+
+        # ── Stage 2: Semantic LLM check ──────────────────────────────────────
+        jan_client = PersonalityAgent.get_jan_client()
+        if jan_client:
+            try:
+                messages = [
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": question},
+                ]
+                response = jan_client.chat(messages, max_tokens=50)
+                logger.info(f"🚦 [Monitor] Stage 2 — LLM response: '{response}'")
+                if "REJECT" in response.upper():
+                    return False, "🚦 **Monitor**: This seems too serious for our fun zone! Try something silly instead! 😄"
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ [Monitor] Stage 2 — LLM check failed ({type(e).__name__}: {e}); "
+                    "falling back to keyword-only approval"
+                )
+        else:
+            logger.info("📝 [Monitor] Stage 2 — no LLM client available; using keyword-only check")
+
         return True, "✅ Approved!"
 
 

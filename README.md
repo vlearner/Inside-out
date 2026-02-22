@@ -50,12 +50,6 @@ A fun multi-agent system inspired by Pixar's **Inside Out** movie, built with Au
 
 ### Running the Application
 
-#### Option 1: Quick Demo 🎬
-
-```bash
-python demo.py
-```
-
 This runs a quick demonstration showing all features without needing a browser!
 
 #### Option 2: Run Tests 🧪
