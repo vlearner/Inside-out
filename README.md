@@ -52,7 +52,7 @@ A fun multi-agent system inspired by Pixar's **Inside Out** movie, built with Au
 
 This runs a quick demonstration showing all features without needing a browser!
 
-#### Option 2: Run Tests 🧪
+#### Run Tests 🧪
 
 ```bash
 python test_suite.py
@@ -60,7 +60,7 @@ python test_suite.py
 
 Runs comprehensive tests to verify all components work correctly.
 
-#### Option 3: Web UI (Streamlit) - Recommended! 🌟
+#### Web UI (Streamlit) - Recommended! 🌟
 
 ```bash
 streamlit run ui/streamlit_app.py
@@ -68,7 +68,7 @@ streamlit run ui/streamlit_app.py
 
 Then open your browser to `http://localhost:8501`
 
-#### Option 4: Command Line Interface
+#### LLM, Tools & Command Line Interface
 
 ```bash
 python main.py
