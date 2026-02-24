@@ -484,7 +484,7 @@ class MultiAgentSystem:
         }
         self.monitor = MonitorAgent()
         self.decision_agent = DecisionAgent()
-        self.memory = ConversationMemory(max_turns=10)
+        self.memory = ConversationMemory(max_turns=5)
 
     def clear_memory(self):
         """Clear conversation memory. Call this on session reset."""
@@ -632,6 +632,11 @@ class MultiAgentSystem:
                 "decisions": {}
             }
 
+        # Retrieve conversation history *before* recording the current turn so
+        # the current user message does not appear twice in the LLM context
+        # (once via history, once as the current prompt).
+        history = self.memory.get_context()
+
         # Record the user's turn in memory
         self.memory.add_user_message(question)
 
@@ -643,9 +648,6 @@ class MultiAgentSystem:
             # Use Decision Agent to determine who should respond
             decisions = self.decision_agent.analyze_message(question)
         
-        # Retrieve conversation history to pass to each agent
-        history = self.memory.get_context()
-
         # Get responses from decided agents
         responses = []
         for agent_type, should_respond in decisions.items():

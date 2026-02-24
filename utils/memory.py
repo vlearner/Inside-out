@@ -19,7 +19,7 @@ class ConversationMemory:
                    Older pairs are dropped when the window is exceeded.
     """
 
-    def __init__(self, max_turns: int = 10) -> None:
+    def __init__(self, max_turns: int = 5) -> None:
         self.max_turns = max_turns
         self._history: List[Dict[str, str]] = []
 
@@ -35,20 +35,19 @@ class ConversationMemory:
         ``"😄 **Joy**: ..."`` string).  It is tagged with the agent name so
         subsequent agents and future turns can reference the emotional source.
 
-        Example stored string: ``"😄 Joy said: 'Ooh, I love that!'"``
+        Example stored string: ``"Joy said: 'Ooh, I love that!'"``
         """
         tagged = f"{agent_name} said: '{content}'"
         self._history.append({"role": "assistant", "content": tagged})
         self._trim()
 
     def get_context(self) -> List[Dict[str, str]]:
-        """Return the capped history slice for injection into an LLM call.
+        """Return the current history for injection into an LLM call.
 
-        Returns at most ``max_turns * 2`` messages (``max_turns`` user/assistant
-        pairs).
+        The window is already enforced by ``_trim()``; this method simply
+        returns a copy of the internal list.
         """
-        max_messages = self.max_turns * 2
-        return list(self._history[-max_messages:])
+        return list(self._history)
 
     def clear(self) -> None:
         """Empty the conversation history completely."""
@@ -59,7 +58,13 @@ class ConversationMemory:
     # ------------------------------------------------------------------
 
     def _trim(self) -> None:
-        """Keep the internal list within the rolling window."""
-        max_messages = self.max_turns * 2
-        if len(self._history) > max_messages:
-            self._history = self._history[-max_messages:]
+        """Remove the oldest complete turns until within the window.
+
+        Trimming is done at user-message boundaries so assistant messages
+        are never left without their preceding user turn.
+        """
+        user_indices = [i for i, m in enumerate(self._history) if m["role"] == "user"]
+        if len(user_indices) > self.max_turns:
+            # Drop everything before the (len - max_turns)th user message
+            cutoff = user_indices[len(user_indices) - self.max_turns]
+            self._history = self._history[cutoff:]

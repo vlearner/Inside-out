@@ -109,7 +109,7 @@ class TestConversationMemoryWindow:
 
     def test_default_max_turns_is_five(self):
         mem = ConversationMemory()
-        assert mem.max_turns == 10  # Default should be 10
+        assert mem.max_turns == 5
 
 
 # ---------------------------------------------------------------------------
