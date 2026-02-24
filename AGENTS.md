@@ -20,8 +20,9 @@ A comprehensive reference for every agent class, supporting module, and configur
 7. [Multi-Agent Orchestration](#7-multi-agent-orchestration)
 8. [Conversation Memory](#8-conversation-memory)
 9. [Output Guardrail](#9-output-guardrail)
-10. [File Map](#10-file-map)
-11. [Adding a New Agent](#11-adding-a-new-agent)
+10. [Synthesis Agent](#10-synthesis-agent)
+11. [File Map](#11-file-map)
+12. [Adding a New Agent](#12-adding-a-new-agent)
 
 ---
 
@@ -77,9 +78,22 @@ User Message
             └──────────┬────────────┘
                         │
                         ▼
+            ┌───────────────────────┐
+            │   Synthesis Agent     │  ← Post-response quality + consensus
+            │  review_responses()   │     1. Echo detection (verbatim echo)
+            │                       │     2. Length enforcement (> 3 sentences)
+            │                       │     3. Consensus headline (2+ agents)
+            │  On violation:        │
+            │   → regenerate once   │
+            │  Togglable via        │
+            │   use_synthesis flag   │
+            └──────────┬────────────┘
+                        │
+                        ▼
               Formatted Response List
               {approved, monitor_message,
-               responses[], decisions{}}
+               responses[], decisions{},
+               synthesis}
                         │
                         ▼
             ┌───────────────────────┐
@@ -500,11 +514,14 @@ llm_response = jan_client.chat(messages, max_tokens=weather_max_tokens)
 ### Initialisation
 
 ```python
-system = MultiAgentSystem()
+system = MultiAgentSystem(use_synthesis=True)
 # Creates: 5 × PersonalityAgent (all enabled by default)
 #          1 × MonitorAgent
 #          1 × DecisionAgent
 #          1 × ConversationMemory (max_turns=10)
+#          1 × SynthesisAgent
+# use_synthesis=True enables the post-response quality review and consensus headline.
+# Set use_synthesis=False to skip the synthesis step (no extra LLM calls).
 ```
 
 ### Full Pipeline
@@ -523,6 +540,7 @@ result = system.get_responses(question, mentioned=["joy"], llm_config=None)
 | 6 | `PersonalityAgent.get_response()` | Run for each `True` emotion that is enabled (history injected) |
 | 7 | `MultiAgentSystem._validate_response()` | Output guardrail — detect violations, regenerate or fallback |
 | 8 | `ConversationMemory.add_agent_response()` | Record each agent's raw LLM text |
+| 9 | `SynthesisAgent.review_responses()` | Quality reflection (echo/length) + consensus headline (when `use_synthesis=True`) |
 
 ### Response Format
 
@@ -546,7 +564,9 @@ result = system.get_responses(question, mentioned=["joy"], llm_config=None)
         "anger": False,
         "fear": False,
         "disgust": False
-    }
+    },
+    "synthesis": "The emotions have spoken: Joy and Anger both had something to say!"
+    # None when < 2 agents respond or use_synthesis=False
 }
 ```
 
@@ -743,17 +763,109 @@ The guardrail adds **zero latency** for passing responses (all checks are O(n) s
 
 ---
 
-## 10. File Map
+## 10. Synthesis Agent
+
+**Class:** `SynthesisAgent` — `agents/personality_agents.py`
+
+### Purpose
+
+The Synthesis Agent is a **post-response quality reviewer and consensus summariser** that runs as the final step in `MultiAgentSystem.get_responses()`, after all personality agents have replied and the output guardrail has been applied. It implements the **Generate → Critique → Regenerate** reflection pattern:
+
+1. **Quality reflection** — checks each response for echo and length violations, triggering one regeneration attempt per violation via `PersonalityAgent.get_response()`.
+2. **Consensus headline** — when 2+ agents responded, generates a short summary sentence that captures the collective emotional reaction.
+
+Both behaviours are togglable via the `use_synthesis: bool` flag on `MultiAgentSystem`. When `use_synthesis=False`, the synthesis step is skipped entirely — no extra LLM calls are made and response time is unchanged.
+
+### Quality Checks
+
+| Check | Violation type | Trigger condition |
+|---|---|---|
+| **Echo detection** | `echo` | Response text contains the user's question verbatim (case-insensitive substring match) |
+| **Length enforcement** | `length_violation` | Response text contains **more than 3 sentences** |
+
+### Corrective Hints
+
+When a violation is detected, the agent's `get_response()` is called once with a corrective hint:
+
+| Violation | Corrective hint |
+|---|---|
+| `echo` | `"IMPORTANT: Do NOT repeat or echo the user's message. React with YOUR feelings in your own words."` |
+| `length_violation` | `"IMPORTANT: Keep your response to 1-2 sentences MAXIMUM. Be brief."` |
+
+If the regenerated response also fails quality checks, or if regeneration raises an exception, the **original** response is kept.
+
+### Consensus Headline
+
+When 2+ agents responded, `generate_headline()` produces a single short sentence summarising the collective emotional reaction. It uses the LLM with `SYNTHESIS_AGENT_PROMPT` when available; otherwise falls back to a deterministic string:
+
+```python
+# Deterministic fallback examples:
+# 2 agents: "The emotions have spoken: Joy and Anger both had something to say!"
+# 3 agents: "The emotions have spoken: Joy, Anger, and Fear all chimed in!"
+```
+
+The headline is returned in the response payload as the `"synthesis"` field (a string or `None`).
+
+### System Prompt (`config/personalities.py`)
+
+```
+You are the Synthesis Agent for an Inside Out personality chat.
+
+You just received responses from multiple emotion agents. Write a single SHORT sentence
+(max 15 words) that captures the collective emotional reaction.
+
+RULES:
+- Mention each responding emotion by name
+- Highlight agreements or contrasts between them
+- Keep it playful and fun
+- Do NOT repeat the user's question
+- ONE sentence only
+
+Example:
+"The emotions are divided: Joy is thrilled, but Fear is already panicking!"
+"Joy and Anger actually agree — that's a first!"
+
+ONLY respond with the headline sentence, nothing else.
+```
+
+The LLM is called with `max_tokens=60`. On any LLM error or unavailability, the headline falls back to the deterministic format.
+
+### Interface
+
+| Method | Signature | Description |
+|---|---|---|
+| `review_responses` | `(question, response_entries, agents, llm_config) → (reviewed_entries, headline_or_none)` | Main entry point: quality-checks all responses, regenerates on violations, produces headline |
+| `generate_headline` | `(question, response_entries) → str` | Generate consensus headline (LLM or fallback) |
+| `_check_quality` | `(question, response_text) → Optional[str]` | Check for echo or length violations |
+| `_is_echo` | `(question, response_text) → bool` | Verbatim echo detection (case-insensitive) |
+
+### Logging
+
+| Event | Log level | Message |
+|---|---|---|
+| Violation detected + regeneration | `INFO` | `🔮 [Synthesis] {name} — violation: {type} — regenerating with hint` |
+| Regeneration passed | `INFO` | `🔮 [Synthesis] {name} — regeneration passed` |
+| Regeneration still violates | `WARNING` | `🔮 [Synthesis] {name} — regeneration still violates; keeping original` |
+| Regeneration raised exception | `WARNING` | `🔮 [Synthesis] {name} — regeneration raised …; keeping original` |
+| LLM headline generated | `INFO` | `🔮 [Synthesis] LLM headline: "…"` |
+| LLM headline failed | `WARNING` | `⚠️ [Synthesis] LLM headline failed (…); using fallback` |
+| Fallback headline used | `INFO` | `🔮 [Synthesis] Fallback headline: "…"` |
+
+---
+
+## 11. File Map
 
 ```
 Inside-out/
 ├── agents/
 │   └── personality_agents.py   # PersonalityAgent, DecisionAgent,
-│                               #   MonitorAgent, MultiAgentSystem
+│                               #   MonitorAgent, SynthesisAgent,
+│                               #   MultiAgentSystem
 │                               #   (output guardrail: _check_guardrails,
 │                               #    _validate_response)
 ├── config/
-│   ├── personalities.py        # PERSONALITY_PROMPTS, MONITOR_PROMPT
+│   ├── personalities.py        # PERSONALITY_PROMPTS, MONITOR_PROMPT,
+│   │                           #   SYNTHESIS_AGENT_PROMPT
 │   └── agents.py               # (legacy config helpers)
 ├── tools/
 │   └── weather_tool.py         # is_weather_query, extract_location_from_message,
@@ -767,7 +879,8 @@ Inside-out/
 ├── tests/                      # Unit and integration tests
 │   ├── test_memory.py          # ConversationMemory + MultiAgentSystem memory tests
 │   ├── test_monitor_agent.py   # MonitorAgent tests
-│   └── test_output_guardrail.py  # OutputGuardrail tests
+│   ├── test_output_guardrail.py  # OutputGuardrail tests
+│   └── test_synthesis_agent.py # SynthesisAgent + integration tests
 ├── main.py                     # Entry point
 ├── .env.example                # Environment variable template
 └── requirements.txt
@@ -775,7 +888,7 @@ Inside-out/
 
 ---
 
-## 11. Adding a New Agent
+## 12. Adding a New Agent
 
 Follow these steps to add a new emotion (e.g., **Surprise 😲**):
 
