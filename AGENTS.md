@@ -18,9 +18,10 @@ A comprehensive reference for every agent class, supporting module, and configur
 5. [LLM Backend — Jan AI Client](#5-llm-backend--jan-ai-client)
 6. [Weather Tool Integration](#6-weather-tool-integration)
 7. [Multi-Agent Orchestration](#7-multi-agent-orchestration)
-8. [Output Guardrail](#8-output-guardrail)
-9. [File Map](#9-file-map)
-10. [Adding a New Agent](#10-adding-a-new-agent)
+8. [Conversation Memory](#8-conversation-memory)
+9. [Output Guardrail](#9-output-guardrail)
+10. [File Map](#10-file-map)
+11. [Adding a New Agent](#11-adding-a-new-agent)
 
 ---
 
@@ -40,6 +41,12 @@ User Message
            │  Yes
            ▼
 ┌─────────────────────┐
+│  ConversationMemory │  ← get_context() → history (prior turns)
+│  (rolling window)   │     add_user_message() records this turn
+└──────────┬──────────┘
+           │ history[]
+           ▼
+┌─────────────────────┐
 │   Decision Agent    │  ← Conductor: LLM analysis → {joy, sadness, ...}
 │   (or @mention      │     falls back to keyword heuristic when LLM
 │    override)        │     is unavailable
@@ -55,7 +62,7 @@ User Message
                         │ each agent:
                         │  1. Strip @mentions
                         │  2. Detect weather → fetch data
-                        │  3. Build prompt
+                        │  3. Build prompt (history prepended)
                         │  4. POST to Jan AI (LLM)  ◄──► Jan AI Server
                         │  5. Fallback → static response
                         ▼
@@ -73,6 +80,12 @@ User Message
               Formatted Response List
               {approved, monitor_message,
                responses[], decisions{}}
+                        │
+                        ▼
+            ┌───────────────────────┐
+            │  ConversationMemory   │  ← add_agent_response() records
+            │  (rolling window)     │     each agent's raw LLM text
+            └───────────────────────┘
 ```
 
 ---
@@ -218,11 +231,11 @@ All five agents share the same `PersonalityAgent` base class and the same 5-step
 ### Common 5-Step Response Flow
 
 ```
-get_response(question)
+get_response(question, history=None)
   │
   ├─ Step 1: Strip @mention tokens  (re.sub r'@\w+', '', question)
   ├─ Step 2: Detect weather query   (is_weather_query → extract_location → get_weather)
-  ├─ Step 3: Build prompt           (system_prompt + user_message ± weather context)
+  ├─ Step 3: Build prompt           ([system] + history + [user±weather context])
   ├─ Step 4: Send to Jan AI         (jan_client.chat(messages, max_tokens=…))
   └─ Step 5: Fallback               (_generate_personality_response / _generate_weather_response)
 ```
@@ -491,6 +504,7 @@ system = MultiAgentSystem()
 # Creates: 5 × PersonalityAgent (all enabled by default)
 #          1 × MonitorAgent
 #          1 × DecisionAgent
+#          1 × ConversationMemory (max_turns=10)
 ```
 
 ### Full Pipeline
@@ -502,10 +516,13 @@ result = system.get_responses(question, mentioned=["joy"], llm_config=None)
 | Step | Component | Action |
 |---|---|---|
 | 1 | `MonitorAgent.check_question()` | Reject or approve |
-| 2 | `@mention` check | If present, set decisions directly (bypass step 3) |
-| 3 | `DecisionAgent.analyze_message()` | LLM → JSON decisions (or keyword fallback) |
-| 4 | `PersonalityAgent.get_response()` | Run for each `True` emotion that is enabled |
-| 5 | `MultiAgentSystem._validate_response()` | Output guardrail — detect violations, regenerate or fallback |
+| 2 | `ConversationMemory.get_context()` | Retrieve prior-turn history |
+| 3 | `ConversationMemory.add_user_message()` | Record the current user turn |
+| 4 | `@mention` check | If present, set decisions directly (bypass step 5) |
+| 5 | `DecisionAgent.analyze_message()` | LLM → JSON decisions (or keyword fallback) |
+| 6 | `PersonalityAgent.get_response()` | Run for each `True` emotion that is enabled (history injected) |
+| 7 | `MultiAgentSystem._validate_response()` | Output guardrail — detect violations, regenerate or fallback |
+| 8 | `ConversationMemory.add_agent_response()` | Record each agent's raw LLM text |
 
 ### Response Format
 
@@ -551,6 +568,7 @@ When rejected by the Monitor, only `approved` and `monitor_message` are meaningf
 | `toggle_agent` | `(agent_type: str) → bool` | Flip an agent on/off; returns new state |
 | `get_agent_status` | `() → Dict[str, bool]` | Dict of `{emotion: enabled}` for all agents |
 | `get_agent_info` | `() → List[Dict]` | Full info list (type, name, emoji, color, enabled) |
+| `clear_memory` | `() → None` | Clear conversation history (call on session reset) |
 
 ```python
 system.toggle_agent("anger")      # disable/enable Anger
@@ -559,11 +577,81 @@ system.get_agent_status()
 
 system.get_agent_info()
 # → [{"type": "joy", "name": "Joy", "emoji": "😄", "color": "yellow", "enabled": True}, ...]
+
+system.clear_memory()             # wipe conversation history (e.g. on new session)
 ```
 
 ---
 
-## 8. Output Guardrail
+## 8. Conversation Memory
+
+**Class:** `ConversationMemory` — `utils/memory.py`
+
+### Purpose
+
+The `ConversationMemory` class provides a **rolling-window conversation history** for the multi-agent system. It stores the last `max_turns` user+assistant turn pairs and injects them into each LLM call so personality agents can reference earlier turns in the conversation — making exchanges feel connected rather than context-free.
+
+### Interface
+
+| Method | Signature | Description |
+|---|---|---|
+| `add_user_message` | `(content: str) → None` | Append a user message and enforce the window |
+| `add_agent_response` | `(agent_name: str, content: str) → None` | Append an agent response tagged with the agent name |
+| `get_context` | `() → list[dict]` | Return a copy of the current history for LLM injection |
+| `clear` | `() → None` | Empty the history completely |
+
+### Storage Format
+
+Messages are stored as `{"role": "user"|"assistant", "content": "..."}` dicts — the same format the LLM chat API already understands:
+
+```python
+# User turn
+{"role": "user", "content": "What's the best ice cream flavour?"}
+
+# Agent turn (raw LLM text tagged with agent name)
+{"role": "assistant", "content": "Joy said: 'Oh, definitely cookie dough!'"}
+```
+
+`add_agent_response()` receives the **raw LLM text** (not the already-formatted `"😄 **Joy**: ..."` string) and prepends the agent name so subsequent agents and future turns can identify the emotional source.
+
+### Rolling Window
+
+`max_turns` controls how many user+assistant pairs are retained (default: `10`). Trimming is done at **user-message boundaries** so assistant messages are never left without their preceding user turn:
+
+```python
+memory = ConversationMemory(max_turns=10)
+memory.add_user_message("Turn 1 question")
+memory.add_agent_response("Joy", "Turn 1 answer")
+# … after 10 full turns, the oldest turn pair is dropped on the next add …
+```
+
+### Integration with `MultiAgentSystem`
+
+`MultiAgentSystem` owns a `self.memory` instance (created in `__init__` with `max_turns=10`). On each approved `get_responses()` call:
+
+1. `history = self.memory.get_context()` — retrieved **before** recording the current user turn to avoid including the current message in the history context passed to agents.
+2. `self.memory.add_user_message(question)` — records the current user turn.
+3. `history` is passed to every `agent.get_response(..., history=history)` call.
+4. After each validated response, `self.memory.add_agent_response(agent.name, raw_text)` records the raw LLM text.
+
+Rejected messages (Monitor blocks) are **never** recorded in memory.
+
+### Usage Example
+
+```python
+system = MultiAgentSystem()
+
+system.get_responses("What's your favourite colour?")
+system.get_responses("And what about food?")   # agents can now reference the prior question
+
+# Start a new session
+system.clear_memory()
+system.get_responses("Fresh start!")           # no prior context
+```
+
+---
+
+## 9. Output Guardrail
 
 **Methods:** `_check_guardrails()`, `_validate_response()` — `agents/personality_agents.py` → `MultiAgentSystem`
 
@@ -655,7 +743,7 @@ The guardrail adds **zero latency** for passing responses (all checks are O(n) s
 
 ---
 
-## 9. File Map
+## 10. File Map
 
 ```
 Inside-out/
@@ -673,9 +761,11 @@ Inside-out/
 ├── utils/
 │   ├── jan_client.py           # JanClient, JanClientError, get_llm_config,
 │   │                           #   validate_environment
+│   ├── memory.py               # ConversationMemory (rolling-window history)
 │   └── weather_client.py       # WeatherClient (raw API wrapper)
 ├── ui/                         # Gradio / Streamlit front-end
 ├── tests/                      # Unit and integration tests
+│   ├── test_memory.py          # ConversationMemory + MultiAgentSystem memory tests
 │   ├── test_monitor_agent.py   # MonitorAgent tests
 │   └── test_output_guardrail.py  # OutputGuardrail tests
 ├── main.py                     # Entry point
@@ -685,7 +775,7 @@ Inside-out/
 
 ---
 
-## 10. Adding a New Agent
+## 11. Adding a New Agent
 
 Follow these steps to add a new emotion (e.g., **Surprise 😲**):
 
