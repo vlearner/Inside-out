@@ -171,7 +171,7 @@ class TestReviewResponses:
         agent.get_response.assert_called_once()
         _, kwargs = agent.get_response.call_args
         assert "corrective_hint" in kwargs
-        assert "repeat" in kwargs["corrective_hint"].lower() or "echo" in kwargs["corrective_hint"].lower()
+        assert "Do NOT repeat or echo" in kwargs["corrective_hint"]
         assert reviewed[0]["response"] == good_response
 
     def test_length_violation_triggers_regeneration(self):

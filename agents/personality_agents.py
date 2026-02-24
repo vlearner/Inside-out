@@ -630,7 +630,7 @@ class SynthesisAgent:
                         logger.info(
                             f"🔮 [Synthesis] {entry['agent']} — regeneration passed"
                         )
-                        entry = dict(entry)
+                        entry = entry.copy()
                         entry["response"] = regenerated
                     else:
                         logger.warning(
