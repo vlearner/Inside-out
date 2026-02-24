@@ -7,7 +7,7 @@ import sys
 import json
 import re
 from typing import Dict, List, Optional
-from config.personalities import PERSONALITY_PROMPTS, MONITOR_PROMPT
+from config.personalities import PERSONALITY_PROMPTS, MONITOR_PROMPT, SYNTHESIS_AGENT_PROMPT
 from utils.memory import ConversationMemory
 
 # Configure logging to show in terminal with more detail
@@ -451,6 +451,202 @@ class MonitorAgent:
         return True, "✅ Approved!"
 
 
+class SynthesisAgent:
+    """Post-response quality reviewer and consensus summariser.
+
+    Runs as the final step in ``MultiAgentSystem.get_responses()`` after all
+    personality agents have replied.  It performs two tasks:
+
+    1. **Quality reflection** — checks each response for echo and length
+       violations.  On a violation it triggers one regeneration attempt with a
+       corrective instruction via ``PersonalityAgent.get_response()``.
+    2. **Consensus headline** — when 2+ agents responded, generates a short
+       summary sentence capturing the collective emotional reaction.  Uses the
+       LLM when available, otherwise builds a simple string-based fallback.
+    """
+
+    def __init__(self):
+        self.name = "Synthesis"
+        self.system_prompt = SYNTHESIS_AGENT_PROMPT
+
+    # ------------------------------------------------------------------
+    # LLM access (shared singleton)
+    # ------------------------------------------------------------------
+
+    def get_jan_client(self):
+        """Get shared Jan client."""
+        return PersonalityAgent.get_jan_client()
+
+    # ------------------------------------------------------------------
+    # Quality reflection helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_response_text(response: str) -> str:
+        """Extract just the text portion from a formatted agent response."""
+        match = re.search(r'\*\*([^*]+?)\*\*:\s*(.*)', response, re.DOTALL)
+        if match:
+            return match.group(2).strip()
+        return response
+
+    @staticmethod
+    def _count_sentences(text: str) -> int:
+        """Count sentences by splitting on terminal punctuation."""
+        parts = re.split(r'[.!?]+', text.strip())
+        return len([p for p in parts if p.strip()])
+
+    @staticmethod
+    def _is_echo(question: str, response_text: str) -> bool:
+        """Return *True* if *response_text* echoes the user question verbatim."""
+        clean_q = question.strip().lower()
+        clean_r = response_text.strip().lower()
+        if not clean_q:
+            return False
+        return clean_q in clean_r
+
+    def _check_quality(self, question: str, response_text: str) -> Optional[str]:
+        """Check a single response for echo or length violations.
+
+        Returns a violation-type string (``"echo"`` or ``"length_violation"``)
+        or ``None`` when the response is clean.
+        """
+        if self._is_echo(question, response_text):
+            return "echo"
+        if self._count_sentences(response_text) > 3:
+            return "length_violation"
+        return None
+
+    _CORRECTIVE_HINTS = {
+        "echo": (
+            "IMPORTANT: Do NOT repeat or echo the user's message. "
+            "React with YOUR feelings in your own words."
+        ),
+        "length_violation": (
+            "IMPORTANT: Keep your response to 1-2 sentences MAXIMUM. Be brief."
+        ),
+    }
+
+    # ------------------------------------------------------------------
+    # Consensus headline
+    # ------------------------------------------------------------------
+
+    def _generate_headline_fallback(self, response_entries: List[Dict]) -> str:
+        """Build a simple string-based headline without an LLM call."""
+        names = [r["agent"] for r in response_entries]
+        if len(names) == 2:
+            return f"The emotions have spoken: {names[0]} and {names[1]} both had something to say!"
+        return (
+            f"The emotions have spoken: {', '.join(names[:-1])}, "
+            f"and {names[-1]} all chimed in!"
+        )
+
+    def generate_headline(self, question: str, response_entries: List[Dict]) -> str:
+        """Return a consensus headline for 2+ agent responses.
+
+        Uses the LLM when available; falls back to a deterministic string.
+        """
+        jan_client = self.get_jan_client()
+        if jan_client:
+            try:
+                summary_input = "\n".join(
+                    f"- {r['agent']}: {self._extract_response_text(r['response'])}"
+                    for r in response_entries
+                )
+                messages = [
+                    {"role": "system", "content": self.system_prompt},
+                    {
+                        "role": "user",
+                        "content": (
+                            f'User asked: "{question}"\n\n'
+                            f"Agent responses:\n{summary_input}\n\n"
+                            "Write a single SHORT headline sentence."
+                        ),
+                    },
+                ]
+                headline = jan_client.chat(messages, max_tokens=60)
+                if headline and headline.strip():
+                    logger.info(f"🔮 [Synthesis] LLM headline: \"{headline.strip()}\"")
+                    return headline.strip()
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ [Synthesis] LLM headline failed ({type(e).__name__}: {e}); "
+                    "using fallback"
+                )
+
+        fallback = self._generate_headline_fallback(response_entries)
+        logger.info(f"🔮 [Synthesis] Fallback headline: \"{fallback}\"")
+        return fallback
+
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
+    def review_responses(
+        self,
+        question: str,
+        response_entries: List[Dict],
+        agents: Dict[str, "PersonalityAgent"],
+        llm_config: Optional[Dict] = None,
+    ) -> tuple:
+        """Review all personality responses and produce a consensus headline.
+
+        Returns:
+            ``(reviewed_entries, headline_or_none)`` where
+            *reviewed_entries* is the (possibly regenerated) list and
+            *headline_or_none* is a string when 2+ agents responded, else
+            ``None``.
+        """
+        reviewed: List[Dict] = []
+
+        for entry in response_entries:
+            agent = agents.get(entry["emotion"])
+            text = self._extract_response_text(entry["response"])
+            violation = self._check_quality(question, text)
+
+            if violation and agent:
+                hint = self._CORRECTIVE_HINTS.get(
+                    violation,
+                    "IMPORTANT: Keep your response short and in character.",
+                )
+                logger.info(
+                    f"🔮 [Synthesis] {entry['agent']} — violation: {violation} — "
+                    f"regenerating with hint"
+                )
+                try:
+                    regenerated = agent.get_response(
+                        question, llm_config, corrective_hint=hint
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"🔮 [Synthesis] {entry['agent']} — regeneration raised "
+                        f"{type(exc).__name__}: {exc}; keeping original"
+                    )
+                    regenerated = None
+
+                if regenerated:
+                    new_text = self._extract_response_text(regenerated)
+                    new_violation = self._check_quality(question, new_text)
+                    if new_violation is None:
+                        logger.info(
+                            f"🔮 [Synthesis] {entry['agent']} — regeneration passed"
+                        )
+                        entry = dict(entry)
+                        entry["response"] = regenerated
+                    else:
+                        logger.warning(
+                            f"🔮 [Synthesis] {entry['agent']} — regeneration still "
+                            "violates; keeping original"
+                        )
+
+            reviewed.append(entry)
+
+        headline = None
+        if len(reviewed) >= 2:
+            headline = self.generate_headline(question, reviewed)
+
+        return reviewed, headline
+
+
 class MultiAgentSystem:
     """Orchestrates multiple personality agents with Decision Agent"""
 
@@ -474,7 +670,7 @@ class MultiAgentSystem:
         "hopeless", "gloomy", "miserable", "grief", "sorrow",
     ]
     
-    def __init__(self):
+    def __init__(self, use_synthesis: bool = True):
         self.agents: Dict[str, PersonalityAgent] = {
             "joy": PersonalityAgent("joy", enabled=True),
             "sadness": PersonalityAgent("sadness", enabled=True),
@@ -485,6 +681,8 @@ class MultiAgentSystem:
         self.monitor = MonitorAgent()
         self.decision_agent = DecisionAgent()
         self.memory = ConversationMemory(max_turns=10)
+        self.use_synthesis = use_synthesis
+        self.synthesis_agent = SynthesisAgent()
 
     def clear_memory(self):
         """Clear conversation memory. Call this on session reset."""
@@ -667,11 +865,19 @@ class MultiAgentSystem:
                         "response": validated
                     })
         
+        # ── Synthesis step (quality reflection + consensus headline) ────────
+        synthesis = None
+        if self.use_synthesis and responses:
+            responses, synthesis = self.synthesis_agent.review_responses(
+                question, responses, self.agents, llm_config
+            )
+
         return {
             "approved": True,
             "monitor_message": monitor_message,
             "responses": responses,
-            "decisions": decisions
+            "decisions": decisions,
+            "synthesis": synthesis,
         }
     
     def toggle_agent(self, agent_type: str) -> bool:
