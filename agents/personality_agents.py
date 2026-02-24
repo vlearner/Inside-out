@@ -40,6 +40,9 @@ except ImportError as e:
     WEATHER_AVAILABLE = False
     logger.warning(f"⚠️ Weather tool not available: {e}")
 
+# Import conversation memory
+from utils.memory import ConversationMemory
+
 
 # Decision Agent prompt for analyzing who should respond
 DECISION_AGENT_PROMPT = """You are the Decision Agent for an Inside Out emotion chat.
@@ -129,7 +132,7 @@ class PersonalityAgent:
         self.system_prompt = self.config.get("system_prompt", "")
         self.enabled = enabled
     
-    def get_response(self, question: str, llm_config: Optional[Dict] = None) -> str:
+    def get_response(self, question: str, llm_config: Optional[Dict] = None, history: Optional[List[Dict]] = None) -> str:
         """
         Generate a response based on this personality using Jan AI.
         Falls back to static response if Jan AI is unavailable.
@@ -141,6 +144,13 @@ class PersonalityAgent:
           3. Build prompt with weather context (if any)
           4. Send prompt to Jan AI → return LLM response
           5. On failure → return LOCAL static fallback
+
+        Args:
+            question: The user's message.
+            llm_config: Optional LLM configuration overrides.
+            history: Optional list of prior conversation messages
+                     (``[{"role": "user"|"assistant", "content": "..."}]``)
+                     to prepend so the agent has rolling context.
         """
         if not self.enabled:
             return None
@@ -185,10 +195,14 @@ class PersonalityAgent:
                 "Do NOT repeat their words. React with YOUR emotion."
             )
 
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": user_message},
-        ]
+        # Prepend rolling history between the system prompt and the new user
+        # message so the LLM has context from prior turns.
+        history_messages = list(history) if history else []
+        messages = (
+            [{"role": "system", "content": self.system_prompt}]
+            + history_messages
+            + [{"role": "user", "content": user_message}]
+        )
 
         # Give weather responses more token room so the model includes actual numbers
         weather_max_tokens = 250 if weather_context else None
@@ -453,6 +467,7 @@ class MultiAgentSystem:
         }
         self.monitor = MonitorAgent()
         self.decision_agent = DecisionAgent()
+        self.memory = ConversationMemory()
     
     def get_responses(self, question: str, mentioned: List[str] = None, llm_config: Optional[Dict] = None) -> Dict:
         """
@@ -483,13 +498,20 @@ class MultiAgentSystem:
         else:
             # Use Decision Agent to determine who should respond
             decisions = self.decision_agent.analyze_message(question)
-        
+
+        # Snapshot current history before adding the new user turn so that
+        # agents see prior context but NOT the current question twice.
+        history_context = self.memory.get_context()
+
+        # Record the current user message in memory.
+        self.memory.add_user_message(question)
+
         # Get responses from decided agents
         responses = []
         for agent_type, should_respond in decisions.items():
             agent = self.agents.get(agent_type)
             if agent and agent.enabled and should_respond:
-                response = agent.get_response(question, llm_config)
+                response = agent.get_response(question, llm_config, history=history_context)
                 if response:
                     responses.append({
                         "agent": agent.name,
@@ -498,6 +520,8 @@ class MultiAgentSystem:
                         "color": agent.color,
                         "response": response
                     })
+                    # Store each agent's response tagged with its name.
+                    self.memory.add_agent_response(agent.name, response)
         
         return {
             "approved": True,
@@ -505,6 +529,11 @@ class MultiAgentSystem:
             "responses": responses,
             "decisions": decisions
         }
+
+    def clear_memory(self) -> None:
+        """Clear conversation memory (call on session reset)."""
+        self.memory.clear()
+        logger.info("🧹 Conversation memory cleared")
     
     def toggle_agent(self, agent_type: str) -> bool:
         """Toggle an agent on/off"""

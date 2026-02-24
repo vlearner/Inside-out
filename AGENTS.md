@@ -17,9 +17,10 @@ A comprehensive reference for every agent class, supporting module, and configur
    - [Disgust 🤢](#disgust-)
 5. [LLM Backend — Jan AI Client](#5-llm-backend--jan-ai-client)
 6. [Weather Tool Integration](#6-weather-tool-integration)
-7. [Multi-Agent Orchestration](#7-multi-agent-orchestration)
-8. [File Map](#8-file-map)
-9. [Adding a New Agent](#9-adding-a-new-agent)
+7. [Conversation Memory](#7-conversation-memory)
+8. [Multi-Agent Orchestration](#8-multi-agent-orchestration)
+9. [File Map](#9-file-map)
+10. [Adding a New Agent](#10-adding-a-new-agent)
 
 ---
 
@@ -468,7 +469,77 @@ llm_response = jan_client.chat(messages, max_tokens=weather_max_tokens)
 
 ---
 
-## 7. Multi-Agent Orchestration
+## 7. Conversation Memory
+
+**Class:** `ConversationMemory` — `utils/memory.py`
+
+### Purpose
+
+`ConversationMemory` gives the personality agents a **rolling window** of recent conversation history. Without it every message is treated as a brand-new, context-free interaction. With it, agents can reference what was said 2–3 turns ago — which is central to the Inside Out premise where emotions remember and react to accumulated experiences.
+
+### Design decisions
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| **Window size** | Configurable `max_turns` (default **5**) | Balances context richness against token cost |
+| **Memory ownership** | Lives on `MultiAgentSystem`, not on individual agents | The system owns the conversation; agents are stateless workers |
+| **Emotion-aware tagging** | Agent responses stored as `"Joy said: <response>"` | Preserves emotional source in history for subsequent turns |
+| **Clear trigger** | Explicit `MultiAgentSystem.clear_memory()` | UI is responsible for calling this on session reset |
+
+### Interface
+
+```python
+class ConversationMemory:
+    def __init__(self, max_turns: int = 5): ...
+    def add_user_message(self, content: str): ...
+    def add_agent_response(self, agent_name: str, content: str): ...
+    def get_context(self) -> list[dict]: ...  # Returns copy of messages list for LLM
+    def clear(self): ...
+```
+
+### Rolling window trim
+
+The window stores up to `max_turns × 2` raw messages (one user + one-or-more agent messages per turn). When the list exceeds that cap, the oldest messages are silently discarded:
+
+```python
+max_messages = self.max_turns * 2
+if len(self._history) > max_messages:
+    self._history = self._history[-max_messages:]
+```
+
+### How history flows into the LLM call
+
+`MultiAgentSystem.get_responses()` takes a **snapshot** of the current history before recording the new user message, then passes that snapshot to every `PersonalityAgent.get_response()` call. Inside `get_response()`, the history is inserted between the system prompt and the new user message:
+
+```
+[system prompt]
+[history[0]]        ← prior user/assistant turns
+[history[1]]
+...
+[new user message]  ← current question (with weather context if applicable)
+```
+
+After agents respond, each response is appended to memory with its agent name tagged:
+
+```python
+# MultiAgentSystem.get_responses()
+history_context = self.memory.get_context()          # snapshot before new turn
+self.memory.add_user_message(question)               # record user input
+# … for each responding agent …
+self.memory.add_agent_response(agent.name, response) # record tagged response
+```
+
+### Session reset
+
+Call `clear_memory()` on the `MultiAgentSystem` instance when the user starts a new session. The UI is responsible for triggering this:
+
+```python
+system.clear_memory()   # → self.memory.clear()
+```
+
+---
+
+## 8. Multi-Agent Orchestration
 
 **Class:** `MultiAgentSystem` — `agents/personality_agents.py`
 
@@ -479,6 +550,7 @@ system = MultiAgentSystem()
 # Creates: 5 × PersonalityAgent (all enabled by default)
 #          1 × MonitorAgent
 #          1 × DecisionAgent
+#          1 × ConversationMemory (max_turns=5)
 ```
 
 ### Full Pipeline
@@ -492,7 +564,10 @@ result = system.get_responses(question, mentioned=["joy"], llm_config=None)
 | 1 | `MonitorAgent.check_question()` | Reject or approve |
 | 2 | `@mention` check | If present, set decisions directly (bypass step 3) |
 | 3 | `DecisionAgent.analyze_message()` | LLM → JSON decisions (or keyword fallback) |
-| 4 | `PersonalityAgent.get_response()` | Run for each `True` emotion that is enabled |
+| 4 | Snapshot `memory.get_context()` | Capture history before recording new turn |
+| 5 | `memory.add_user_message()` | Record the current user message |
+| 6 | `PersonalityAgent.get_response()` | Run for each `True` emotion (history passed in) |
+| 7 | `memory.add_agent_response()` | Tag and store each agent response |
 
 ### Response Format
 
@@ -538,6 +613,7 @@ When rejected by the Monitor, only `approved` and `monitor_message` are meaningf
 | `toggle_agent` | `(agent_type: str) → bool` | Flip an agent on/off; returns new state |
 | `get_agent_status` | `() → Dict[str, bool]` | Dict of `{emotion: enabled}` for all agents |
 | `get_agent_info` | `() → List[Dict]` | Full info list (type, name, emoji, color, enabled) |
+| `clear_memory` | `() → None` | Erase all conversation history (call on session reset) |
 
 ```python
 system.toggle_agent("anger")      # disable/enable Anger
@@ -546,11 +622,13 @@ system.get_agent_status()
 
 system.get_agent_info()
 # → [{"type": "joy", "name": "Joy", "emoji": "😄", "color": "yellow", "enabled": True}, ...]
+
+system.clear_memory()             # reset conversation history on new session
 ```
 
 ---
 
-## 8. File Map
+## 9. File Map
 
 ```
 Inside-out/
@@ -566,6 +644,7 @@ Inside-out/
 ├── utils/
 │   ├── jan_client.py           # JanClient, JanClientError, get_llm_config,
 │   │                           #   validate_environment
+│   ├── memory.py               # ConversationMemory (rolling window)
 │   └── weather_client.py       # WeatherClient (raw API wrapper)
 ├── ui/                         # Gradio / Streamlit front-end
 ├── tests/                      # Unit and integration tests
@@ -576,7 +655,7 @@ Inside-out/
 
 ---
 
-## 9. Adding a New Agent
+## 10. Adding a New Agent
 
 Follow these steps to add a new emotion (e.g., **Surprise 😲**):
 
