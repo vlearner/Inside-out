@@ -8,6 +8,7 @@ import json
 import re
 from typing import Dict, List, Optional
 from config.personalities import PERSONALITY_PROMPTS, MONITOR_PROMPT
+from utils.memory import ConversationMemory
 
 # Configure logging to show in terminal with more detail
 logging.basicConfig(
@@ -129,7 +130,7 @@ class PersonalityAgent:
         self.system_prompt = self.config.get("system_prompt", "")
         self.enabled = enabled
     
-    def get_response(self, question: str, llm_config: Optional[Dict] = None, corrective_hint: str = "") -> str:
+    def get_response(self, question: str, llm_config: Optional[Dict] = None, corrective_hint: str = "", history: Optional[list] = None) -> str:
         """
         Generate a response based on this personality using Jan AI.
         Falls back to static response if Jan AI is unavailable.
@@ -145,6 +146,9 @@ class PersonalityAgent:
         Args:
             corrective_hint: Optional instruction appended to the user message for
                              guardrail-triggered regeneration attempts.
+            history: Optional list of prior conversation messages
+                     (``{"role": ..., "content": ...}`` dicts) prepended between
+                     the system prompt and the current user message.
         """
         if not self.enabled:
             return None
@@ -192,10 +196,10 @@ class PersonalityAgent:
         if corrective_hint:
             user_message += f"\n\n{corrective_hint}"
 
-        messages = [
-            {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": user_message},
-        ]
+        messages = [{"role": "system", "content": self.system_prompt}]
+        if history:
+            messages.extend(history)
+        messages.append({"role": "user", "content": user_message})
 
         # Give weather responses more token room so the model includes actual numbers
         weather_max_tokens = 250 if weather_context else None
@@ -480,6 +484,11 @@ class MultiAgentSystem:
         }
         self.monitor = MonitorAgent()
         self.decision_agent = DecisionAgent()
+        self.memory = ConversationMemory(max_turns=5)
+
+    def clear_memory(self):
+        """Clear conversation memory. Call this on session reset."""
+        self.memory.clear()
 
     # ------------------------------------------------------------------
     # Output Guardrail helpers
@@ -622,7 +631,10 @@ class MultiAgentSystem:
                 "responses": [],
                 "decisions": {}
             }
-        
+
+        # Record the user's turn in memory
+        self.memory.add_user_message(question)
+
         # If there are @mentions, those emotions respond directly
         if mentioned and len(mentioned) > 0:
             logger.info(f"📌 Direct @mentions: {mentioned} - bypassing Decision Agent")
@@ -631,14 +643,20 @@ class MultiAgentSystem:
             # Use Decision Agent to determine who should respond
             decisions = self.decision_agent.analyze_message(question)
         
+        # Retrieve conversation history to pass to each agent
+        history = self.memory.get_context()
+
         # Get responses from decided agents
         responses = []
         for agent_type, should_respond in decisions.items():
             agent = self.agents.get(agent_type)
             if agent and agent.enabled and should_respond:
-                response = agent.get_response(question, llm_config)
+                response = agent.get_response(question, llm_config, corrective_hint="", history=history)
                 if response:
                     validated = self._validate_response(agent, response, question, llm_config)
+                    # Record the raw LLM text (without the "emoji **Name**:" prefix)
+                    raw_text = self._extract_response_text(validated)
+                    self.memory.add_agent_response(agent.name, raw_text)
                     responses.append({
                         "agent": agent.name,
                         "emotion": agent_type,
