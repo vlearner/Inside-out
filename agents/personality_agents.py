@@ -484,7 +484,7 @@ class MultiAgentSystem:
         }
         self.monitor = MonitorAgent()
         self.decision_agent = DecisionAgent()
-        self.memory = ConversationMemory(max_turns=5)
+        self.memory = ConversationMemory(max_turns=10)
 
     def clear_memory(self):
         """Clear conversation memory. Call this on session reset."""

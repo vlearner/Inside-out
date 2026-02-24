@@ -19,7 +19,7 @@ class ConversationMemory:
                    Older pairs are dropped when the window is exceeded.
     """
 
-    def __init__(self, max_turns: int = 5) -> None:
+    def __init__(self, max_turns: int = 10) -> None:
         self.max_turns = max_turns
         self._history: List[Dict[str, str]] = []
 
