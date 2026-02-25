@@ -43,37 +43,41 @@ except ImportError as e:
 
 
 # Decision Agent prompt for analyzing who should respond
-DECISION_AGENT_PROMPT = """You are the Decision Agent for an Inside Out emotion chat.
-
-Your job is to analyze messages and decide which emotions should respond.
+DECISION_AGENT_PROMPT = """You are the Decision Agent for an Inside Out personality chat.
+Analyze the user's message and decide which emotions should respond.
 
 Available emotions:
-- joy: Responds to positive, fun, happy, exciting topics AND neutral informational queries (like weather, facts)
-- sadness: Responds to melancholic, missing, emotional depth topics
-- anger: Responds to unfair, frustrating, injustice topics
-- fear: Responds to risky, scary, dangerous, worrying topics
-- disgust: Responds to gross, tacky, cringe, fashion/taste topics
+- joy: Responds to positive, fun, exciting topics
+- sadness: Responds to loss, longing, emotional depth, reflective moments
+- anger: Responds to unfair, frustrating situations, strong opinions
+- fear: Responds to scary, risky, uncertain, worrying topics
+- disgust: Responds to cringy, tacky, opinion-worthy, or taste-related topics
 
-Rules:
-1. NOT every emotion needs to respond to every message
-2. Pick only 1-3 emotions that are MOST relevant
-3. For neutral questions (like "favorite food" or "what's the weather"), Joy should respond
-4. For weather queries ("what's the weather in...", "how hot is it"), Joy should respond
-5. For negative topics, relevant emotions respond
-6. Return a JSON object with emotions as keys and boolean values
+RULES:
+1. If the message contains "everyone", "all of you", "you all", "group", or "everybody" → set ALL five emotions to true
+2. ALWAYS pick at least 2 emotions (never just 1) for richer conversations
+3. Pick up to 3 most-relevant emotions for normal messages
+4. Joy should NOT always be included — only when genuinely positive/fun/exciting
+5. For neutral or informational queries, pick Joy + Fear (excited vs worried)
+6. For opinion questions, always include Disgust (she has strong opinions)
+7. For reflective/deep questions, include Sadness
+8. Prefer CONTRASTING emotion pairs for more interesting dialogue (e.g. Joy+Fear, Anger+Disgust)
 
 Example:
-User: "What's your favorite pizza?"
-Response: {"joy": true, "sadness": false, "anger": false, "fear": false, "disgust": false}
+User: "What do you all think about pineapple on pizza?"
+Response: {"joy": true, "sadness": true, "anger": true, "fear": true, "disgust": true}
 
-User: "What's the weather in New York?"
-Response: {"joy": true, "sadness": false, "anger": false, "fear": false, "disgust": false}
+User: "What's your favorite pizza?"
+Response: {"joy": true, "sadness": false, "anger": false, "fear": false, "disgust": true}
 
 User: "I'm worried about climate change"
 Response: {"joy": false, "sadness": true, "anger": true, "fear": true, "disgust": false}
 
 User: "This trend is so cringe"
-Response: {"joy": false, "sadness": false, "anger": false, "fear": false, "disgust": true}
+Response: {"joy": false, "sadness": false, "anger": true, "fear": false, "disgust": true}
+
+User: "Tell everyone about roller coasters"
+Response: {"joy": true, "sadness": true, "anger": true, "fear": true, "disgust": true}
 
 ONLY respond with the JSON object, nothing else."""
 
@@ -326,64 +330,118 @@ class DecisionAgent:
         return self._fallback_analysis(message)
     
     def _fallback_analysis(self, message: str) -> Dict[str, bool]:
-        """Fallback keyword-based analysis when LLM is unavailable"""
+        """Fallback keyword-based analysis when LLM is unavailable.
+
+        Escalation tiers:
+          • "everyone"/"all"/"you all"/"group" → ALL 5 emotions respond
+          • 3+ keyword groups matched          → ALL 5 emotions respond
+          • 2 keyword groups matched           → those 2 + 1 complementary (3 total)
+          • 1 keyword group matched            → that 1 + 1 complementary (2 total)
+          • 0 keywords matched                 → contextual pair (2 total)
+        """
         logger.info("📝 [Decision Agent] Using fallback keyword analysis")
-        
+
         message_lower = message.lower()
         decisions = {
             "joy": False,
             "sadness": False,
             "anger": False,
             "fear": False,
-            "disgust": False
+            "disgust": False,
         }
-        
-        # Joy keywords - positive/fun (includes weather - neutral questions go to Joy)
-        joy_keywords = ["favorite", "best", "love", "fun", "happy", "excited", "great", "amazing", "pizza", "food", "like", "enjoy", "weather", "temperature", "forecast", "sunny", "rain"]
-        
-        # Sadness keywords
-        sadness_keywords = ["sad", "miss", "lonely", "wish", "lost", "remember", "gone", "cry"]
-        
-        # Anger keywords
-        anger_keywords = ["unfair", "hate", "angry", "frustrat", "stupid", "ridiculous", "worst", "terrible"]
-        
-        # Fear keywords
-        fear_keywords = ["scary", "afraid", "worried", "dangerous", "risk", "nervous", "what if"]
-        
-        # Disgust keywords
-        disgust_keywords = ["gross", "ew", "yuck", "cringe", "tacky", "ugly", "embarrassing", "fashion"]
-        
-        # Check each emotion
-        for keyword in joy_keywords:
-            if keyword in message_lower:
+
+        # ── Check for "everyone" / "all" trigger words ────────────────────────
+        everyone_keywords = ["everyone", "you all", "all of you", "group", "everybody"]
+        for kw in everyone_keywords:
+            if kw in message_lower:
+                decisions = {e: True for e in decisions}
+                logger.info(f"🧠 [Decision Fallback] '{kw}' detected — activating ALL personalities")
+                return decisions
+
+        # ── Keyword lists per emotion ─────────────────────────────────────────
+        keyword_map = {
+            "joy": ["favorite", "best", "love", "fun", "happy", "excited", "great",
+                     "amazing", "pizza", "food", "like", "enjoy", "weather",
+                     "temperature", "forecast", "sunny", "rain"],
+            "sadness": ["sad", "miss", "lonely", "wish", "lost", "remember",
+                        "gone", "cry"],
+            "anger": ["unfair", "hate", "angry", "frustrat", "stupid",
+                      "ridiculous", "worst", "terrible"],
+            "fear": ["scary", "afraid", "worried", "dangerous", "risk",
+                     "nervous", "what if"],
+            "disgust": ["gross", "ew", "yuck", "cringe", "tacky", "ugly",
+                        "embarrassing", "fashion"],
+        }
+
+        for emotion, keywords in keyword_map.items():
+            for keyword in keywords:
+                if keyword in message_lower:
+                    decisions[emotion] = True
+                    break
+
+        matched = [e for e, v in decisions.items() if v]
+        matched_count = len(matched)
+
+        # ── Tier: 3+ keyword groups → activate ALL emotions ──────────────────
+        if matched_count >= 3:
+            decisions = {e: True for e in decisions}
+            logger.info(
+                f"🧠 [Decision Fallback] {matched_count} emotions matched "
+                "— activating ALL personalities"
+            )
+
+        # ── Tier: 2 matched → add a complementary 3rd emotion ────────────────
+        elif matched_count == 2:
+            unmatched = [e for e in decisions if not decisions[e]]
+            complement_priority = ["fear", "disgust", "sadness", "anger", "joy"]
+            for c in complement_priority:
+                if c in unmatched:
+                    decisions[c] = True
+                    logger.info(
+                        f"🧠 [Decision Fallback] 2 matched — adding '{c}' "
+                        "for richer dialogue"
+                    )
+                    break
+
+        # ── Tier: 1 matched → add a complementary 2nd emotion ────────────────
+        elif matched_count == 1:
+            sole = matched[0]
+            complement = {
+                "joy": "fear",
+                "sadness": "joy",
+                "anger": "disgust",
+                "fear": "joy",
+                "disgust": "anger",
+            }
+            partner = complement.get(sole, "joy")
+            decisions[partner] = True
+            logger.info(
+                f"🧠 [Decision Fallback] 1 matched ({sole}) — adding '{partner}'"
+            )
+
+        # ── Tier: 0 matched → contextual default pair ────────────────────────
+        else:
+            if "?" in message:
                 decisions["joy"] = True
-                break
-        
-        for keyword in sadness_keywords:
-            if keyword in message_lower:
-                decisions["sadness"] = True
-                break
-        
-        for keyword in anger_keywords:
-            if keyword in message_lower:
-                decisions["anger"] = True
-                break
-        
-        for keyword in fear_keywords:
-            if keyword in message_lower:
                 decisions["fear"] = True
-                break
-        
-        for keyword in disgust_keywords:
-            if keyword in message_lower:
+                logger.info(
+                    "🧠 [Decision Fallback] No keywords, question mark → Joy + Fear"
+                )
+            elif any(w in message_lower for w in ["think", "opinion", "feel", "believe"]):
                 decisions["disgust"] = True
-                break
-        
-        # Default: if nothing matched, just Joy responds to neutral questions
-        if not any(decisions.values()):
-            decisions["joy"] = True
-        
-        logger.info(f"📝 [Decision Agent] Fallback decisions: {decisions}")
+                decisions["joy"] = True
+                logger.info(
+                    "🧠 [Decision Fallback] No keywords, opinion words → Disgust + Joy"
+                )
+            else:
+                decisions["joy"] = True
+                decisions["sadness"] = True
+                logger.info(
+                    "🧠 [Decision Fallback] No keywords, neutral → Joy + Sadness"
+                )
+
+        final = [e for e, v in decisions.items() if v]
+        logger.info(f"📝 [Decision Agent] Fallback decisions: {final}")
         return decisions
 
 
