@@ -7,7 +7,7 @@ import sys
 import json
 import re
 from typing import Dict, List, Optional
-from config.personalities import PERSONALITY_PROMPTS, MONITOR_PROMPT
+from config.personalities import PERSONALITY_PROMPTS, MONITOR_PROMPT, SYNTHESIS_AGENT_PROMPT
 from utils.memory import ConversationMemory
 
 # Configure logging to show in terminal with more detail
@@ -43,37 +43,41 @@ except ImportError as e:
 
 
 # Decision Agent prompt for analyzing who should respond
-DECISION_AGENT_PROMPT = """You are the Decision Agent for an Inside Out emotion chat.
-
-Your job is to analyze messages and decide which emotions should respond.
+DECISION_AGENT_PROMPT = """You are the Decision Agent for an Inside Out personality chat.
+Analyze the user's message and decide which emotions should respond.
 
 Available emotions:
-- joy: Responds to positive, fun, happy, exciting topics AND neutral informational queries (like weather, facts)
-- sadness: Responds to melancholic, missing, emotional depth topics
-- anger: Responds to unfair, frustrating, injustice topics
-- fear: Responds to risky, scary, dangerous, worrying topics
-- disgust: Responds to gross, tacky, cringe, fashion/taste topics
+- joy: Responds to positive, fun, exciting topics
+- sadness: Responds to loss, longing, emotional depth, reflective moments
+- anger: Responds to unfair, frustrating situations, strong opinions
+- fear: Responds to scary, risky, uncertain, worrying topics
+- disgust: Responds to cringy, tacky, opinion-worthy, or taste-related topics
 
-Rules:
-1. NOT every emotion needs to respond to every message
-2. Pick only 1-3 emotions that are MOST relevant
-3. For neutral questions (like "favorite food" or "what's the weather"), Joy should respond
-4. For weather queries ("what's the weather in...", "how hot is it"), Joy should respond
-5. For negative topics, relevant emotions respond
-6. Return a JSON object with emotions as keys and boolean values
+RULES:
+1. If the message contains "everyone", "all of you", "you all", "group", or "everybody" → set ALL five emotions to true
+2. ALWAYS pick at least 2 emotions (never just 1) for richer conversations
+3. Pick up to 3 most-relevant emotions for normal messages
+4. Joy should NOT always be included — only when genuinely positive/fun/exciting
+5. For neutral or informational queries, pick Joy + Fear (excited vs worried)
+6. For opinion questions, always include Disgust (she has strong opinions)
+7. For reflective/deep questions, include Sadness
+8. Prefer CONTRASTING emotion pairs for more interesting dialogue (e.g. Joy+Fear, Anger+Disgust)
 
 Example:
-User: "What's your favorite pizza?"
-Response: {"joy": true, "sadness": false, "anger": false, "fear": false, "disgust": false}
+User: "What do you all think about pineapple on pizza?"
+Response: {"joy": true, "sadness": true, "anger": true, "fear": true, "disgust": true}
 
-User: "What's the weather in New York?"
-Response: {"joy": true, "sadness": false, "anger": false, "fear": false, "disgust": false}
+User: "What's your favorite pizza?"
+Response: {"joy": true, "sadness": false, "anger": false, "fear": false, "disgust": true}
 
 User: "I'm worried about climate change"
 Response: {"joy": false, "sadness": true, "anger": true, "fear": true, "disgust": false}
 
 User: "This trend is so cringe"
-Response: {"joy": false, "sadness": false, "anger": false, "fear": false, "disgust": true}
+Response: {"joy": false, "sadness": false, "anger": true, "fear": false, "disgust": true}
+
+User: "Tell everyone about roller coasters"
+Response: {"joy": true, "sadness": true, "anger": true, "fear": true, "disgust": true}
 
 ONLY respond with the JSON object, nothing else."""
 
@@ -326,64 +330,118 @@ class DecisionAgent:
         return self._fallback_analysis(message)
     
     def _fallback_analysis(self, message: str) -> Dict[str, bool]:
-        """Fallback keyword-based analysis when LLM is unavailable"""
+        """Fallback keyword-based analysis when LLM is unavailable.
+
+        Escalation tiers:
+          • "everyone"/"all"/"you all"/"group" → ALL 5 emotions respond
+          • 3+ keyword groups matched          → ALL 5 emotions respond
+          • 2 keyword groups matched           → those 2 + 1 complementary (3 total)
+          • 1 keyword group matched            → that 1 + 1 complementary (2 total)
+          • 0 keywords matched                 → contextual pair (2 total)
+        """
         logger.info("📝 [Decision Agent] Using fallback keyword analysis")
-        
+
         message_lower = message.lower()
         decisions = {
             "joy": False,
             "sadness": False,
             "anger": False,
             "fear": False,
-            "disgust": False
+            "disgust": False,
         }
-        
-        # Joy keywords - positive/fun (includes weather - neutral questions go to Joy)
-        joy_keywords = ["favorite", "best", "love", "fun", "happy", "excited", "great", "amazing", "pizza", "food", "like", "enjoy", "weather", "temperature", "forecast", "sunny", "rain"]
-        
-        # Sadness keywords
-        sadness_keywords = ["sad", "miss", "lonely", "wish", "lost", "remember", "gone", "cry"]
-        
-        # Anger keywords
-        anger_keywords = ["unfair", "hate", "angry", "frustrat", "stupid", "ridiculous", "worst", "terrible"]
-        
-        # Fear keywords
-        fear_keywords = ["scary", "afraid", "worried", "dangerous", "risk", "nervous", "what if"]
-        
-        # Disgust keywords
-        disgust_keywords = ["gross", "ew", "yuck", "cringe", "tacky", "ugly", "embarrassing", "fashion"]
-        
-        # Check each emotion
-        for keyword in joy_keywords:
-            if keyword in message_lower:
+
+        # ── Check for "everyone" / "all" trigger words ────────────────────────
+        everyone_keywords = ["everyone", "you all", "all of you", "group", "everybody"]
+        for kw in everyone_keywords:
+            if kw in message_lower:
+                decisions = {e: True for e in decisions}
+                logger.info(f"🧠 [Decision Fallback] '{kw}' detected — activating ALL personalities")
+                return decisions
+
+        # ── Keyword lists per emotion ─────────────────────────────────────────
+        keyword_map = {
+            "joy": ["favorite", "best", "love", "fun", "happy", "excited", "great",
+                     "amazing", "pizza", "food", "like", "enjoy", "weather",
+                     "temperature", "forecast", "sunny", "rain"],
+            "sadness": ["sad", "miss", "lonely", "wish", "lost", "remember",
+                        "gone", "cry"],
+            "anger": ["unfair", "hate", "angry", "frustrat", "stupid",
+                      "ridiculous", "worst", "terrible"],
+            "fear": ["scary", "afraid", "worried", "dangerous", "risk",
+                     "nervous", "what if"],
+            "disgust": ["gross", "ew", "yuck", "cringe", "tacky", "ugly",
+                        "embarrassing", "fashion"],
+        }
+
+        for emotion, keywords in keyword_map.items():
+            for keyword in keywords:
+                if keyword in message_lower:
+                    decisions[emotion] = True
+                    break
+
+        matched = [e for e, v in decisions.items() if v]
+        matched_count = len(matched)
+
+        # ── Tier: 3+ keyword groups → activate ALL emotions ──────────────────
+        if matched_count >= 3:
+            decisions = {e: True for e in decisions}
+            logger.info(
+                f"🧠 [Decision Fallback] {matched_count} emotions matched "
+                "— activating ALL personalities"
+            )
+
+        # ── Tier: 2 matched → add a complementary 3rd emotion ────────────────
+        elif matched_count == 2:
+            unmatched = [e for e in decisions if not decisions[e]]
+            complement_priority = ["fear", "disgust", "sadness", "anger", "joy"]
+            for c in complement_priority:
+                if c in unmatched:
+                    decisions[c] = True
+                    logger.info(
+                        f"🧠 [Decision Fallback] 2 matched — adding '{c}' "
+                        "for richer dialogue"
+                    )
+                    break
+
+        # ── Tier: 1 matched → add a complementary 2nd emotion ────────────────
+        elif matched_count == 1:
+            sole = matched[0]
+            complement = {
+                "joy": "fear",
+                "sadness": "joy",
+                "anger": "disgust",
+                "fear": "joy",
+                "disgust": "anger",
+            }
+            partner = complement.get(sole, "joy")
+            decisions[partner] = True
+            logger.info(
+                f"🧠 [Decision Fallback] 1 matched ({sole}) — adding '{partner}'"
+            )
+
+        # ── Tier: 0 matched → contextual default pair ────────────────────────
+        else:
+            if "?" in message:
                 decisions["joy"] = True
-                break
-        
-        for keyword in sadness_keywords:
-            if keyword in message_lower:
-                decisions["sadness"] = True
-                break
-        
-        for keyword in anger_keywords:
-            if keyword in message_lower:
-                decisions["anger"] = True
-                break
-        
-        for keyword in fear_keywords:
-            if keyword in message_lower:
                 decisions["fear"] = True
-                break
-        
-        for keyword in disgust_keywords:
-            if keyword in message_lower:
+                logger.info(
+                    "🧠 [Decision Fallback] No keywords, question mark → Joy + Fear"
+                )
+            elif any(w in message_lower for w in ["think", "opinion", "feel", "believe"]):
                 decisions["disgust"] = True
-                break
-        
-        # Default: if nothing matched, just Joy responds to neutral questions
-        if not any(decisions.values()):
-            decisions["joy"] = True
-        
-        logger.info(f"📝 [Decision Agent] Fallback decisions: {decisions}")
+                decisions["joy"] = True
+                logger.info(
+                    "🧠 [Decision Fallback] No keywords, opinion words → Disgust + Joy"
+                )
+            else:
+                decisions["joy"] = True
+                decisions["sadness"] = True
+                logger.info(
+                    "🧠 [Decision Fallback] No keywords, neutral → Joy + Sadness"
+                )
+
+        final = [e for e, v in decisions.items() if v]
+        logger.info(f"📝 [Decision Agent] Fallback decisions: {final}")
         return decisions
 
 
@@ -451,6 +509,202 @@ class MonitorAgent:
         return True, "✅ Approved!"
 
 
+class SynthesisAgent:
+    """Post-response quality reviewer and consensus summariser.
+
+    Runs as the final step in ``MultiAgentSystem.get_responses()`` after all
+    personality agents have replied.  It performs two tasks:
+
+    1. **Quality reflection** — checks each response for echo and length
+       violations.  On a violation it triggers one regeneration attempt with a
+       corrective instruction via ``PersonalityAgent.get_response()``.
+    2. **Consensus headline** — when 2+ agents responded, generates a short
+       summary sentence capturing the collective emotional reaction.  Uses the
+       LLM when available, otherwise builds a simple string-based fallback.
+    """
+
+    def __init__(self):
+        self.name = "Synthesis"
+        self.system_prompt = SYNTHESIS_AGENT_PROMPT
+
+    # ------------------------------------------------------------------
+    # LLM access (shared singleton)
+    # ------------------------------------------------------------------
+
+    def get_jan_client(self):
+        """Get shared Jan client."""
+        return PersonalityAgent.get_jan_client()
+
+    # ------------------------------------------------------------------
+    # Quality reflection helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_response_text(response: str) -> str:
+        """Extract just the text portion from a formatted agent response."""
+        match = re.search(r'\*\*([^*]+?)\*\*:\s*(.*)', response, re.DOTALL)
+        if match:
+            return match.group(2).strip()
+        return response
+
+    @staticmethod
+    def _count_sentences(text: str) -> int:
+        """Count sentences by splitting on terminal punctuation."""
+        parts = re.split(r'[.!?]+', text.strip())
+        return len([p for p in parts if p.strip()])
+
+    @staticmethod
+    def _is_echo(question: str, response_text: str) -> bool:
+        """Return *True* if *response_text* echoes the user question verbatim."""
+        clean_q = question.strip().lower()
+        clean_r = response_text.strip().lower()
+        if not clean_q:
+            return False
+        return clean_q in clean_r
+
+    def _check_quality(self, question: str, response_text: str) -> Optional[str]:
+        """Check a single response for echo or length violations.
+
+        Returns a violation-type string (``"echo"`` or ``"length_violation"``)
+        or ``None`` when the response is clean.
+        """
+        if self._is_echo(question, response_text):
+            return "echo"
+        if self._count_sentences(response_text) > 3:
+            return "length_violation"
+        return None
+
+    _CORRECTIVE_HINTS = {
+        "echo": (
+            "IMPORTANT: Do NOT repeat or echo the user's message. "
+            "React with YOUR feelings in your own words."
+        ),
+        "length_violation": (
+            "IMPORTANT: Keep your response to 1-2 sentences MAXIMUM. Be brief."
+        ),
+    }
+
+    # ------------------------------------------------------------------
+    # Consensus headline
+    # ------------------------------------------------------------------
+
+    def _generate_headline_fallback(self, response_entries: List[Dict]) -> str:
+        """Build a simple string-based headline without an LLM call."""
+        names = [r["agent"] for r in response_entries]
+        if len(names) == 2:
+            return f"The emotions have spoken: {names[0]} and {names[1]} both had something to say!"
+        return (
+            f"The emotions have spoken: {', '.join(names[:-1])}, "
+            f"and {names[-1]} all chimed in!"
+        )
+
+    def generate_headline(self, question: str, response_entries: List[Dict]) -> str:
+        """Return a consensus headline for 2+ agent responses.
+
+        Uses the LLM when available; falls back to a deterministic string.
+        """
+        jan_client = self.get_jan_client()
+        if jan_client:
+            try:
+                summary_input = "\n".join(
+                    f"- {r['agent']}: {self._extract_response_text(r['response'])}"
+                    for r in response_entries
+                )
+                messages = [
+                    {"role": "system", "content": self.system_prompt},
+                    {
+                        "role": "user",
+                        "content": (
+                            f'User asked: "{question}"\n\n'
+                            f"Agent responses:\n{summary_input}\n\n"
+                            "Write a single SHORT headline sentence."
+                        ),
+                    },
+                ]
+                headline = jan_client.chat(messages, max_tokens=60)
+                if headline and headline.strip():
+                    logger.info(f"🔮 [Synthesis] LLM headline: \"{headline.strip()}\"")
+                    return headline.strip()
+            except Exception as e:
+                logger.warning(
+                    f"⚠️ [Synthesis] LLM headline failed ({type(e).__name__}: {e}); "
+                    "using fallback"
+                )
+
+        fallback = self._generate_headline_fallback(response_entries)
+        logger.info(f"🔮 [Synthesis] Fallback headline: \"{fallback}\"")
+        return fallback
+
+    # ------------------------------------------------------------------
+    # Main entry point
+    # ------------------------------------------------------------------
+
+    def review_responses(
+        self,
+        question: str,
+        response_entries: List[Dict],
+        agents: Dict[str, "PersonalityAgent"],
+        llm_config: Optional[Dict] = None,
+    ) -> tuple:
+        """Review all personality responses and produce a consensus headline.
+
+        Returns:
+            ``(reviewed_entries, headline_or_none)`` where
+            *reviewed_entries* is the (possibly regenerated) list and
+            *headline_or_none* is a string when 2+ agents responded, else
+            ``None``.
+        """
+        reviewed: List[Dict] = []
+
+        for entry in response_entries:
+            agent = agents.get(entry["emotion"])
+            text = self._extract_response_text(entry["response"])
+            violation = self._check_quality(question, text)
+
+            if violation and agent:
+                hint = self._CORRECTIVE_HINTS.get(
+                    violation,
+                    "IMPORTANT: Keep your response short and in character.",
+                )
+                logger.info(
+                    f"🔮 [Synthesis] {entry['agent']} — violation: {violation} — "
+                    f"regenerating with hint"
+                )
+                try:
+                    regenerated = agent.get_response(
+                        question, llm_config, corrective_hint=hint
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f"🔮 [Synthesis] {entry['agent']} — regeneration raised "
+                        f"{type(exc).__name__}: {exc}; keeping original"
+                    )
+                    regenerated = None
+
+                if regenerated:
+                    new_text = self._extract_response_text(regenerated)
+                    new_violation = self._check_quality(question, new_text)
+                    if new_violation is None:
+                        logger.info(
+                            f"🔮 [Synthesis] {entry['agent']} — regeneration passed"
+                        )
+                        entry = entry.copy()
+                        entry["response"] = regenerated
+                    else:
+                        logger.warning(
+                            f"🔮 [Synthesis] {entry['agent']} — regeneration still "
+                            "violates; keeping original"
+                        )
+
+            reviewed.append(entry)
+
+        headline = None
+        if len(reviewed) >= 2:
+            headline = self.generate_headline(question, reviewed)
+
+        return reviewed, headline
+
+
 class MultiAgentSystem:
     """Orchestrates multiple personality agents with Decision Agent"""
 
@@ -474,7 +728,7 @@ class MultiAgentSystem:
         "hopeless", "gloomy", "miserable", "grief", "sorrow",
     ]
     
-    def __init__(self):
+    def __init__(self, use_synthesis: bool = True):
         self.agents: Dict[str, PersonalityAgent] = {
             "joy": PersonalityAgent("joy", enabled=True),
             "sadness": PersonalityAgent("sadness", enabled=True),
@@ -485,6 +739,8 @@ class MultiAgentSystem:
         self.monitor = MonitorAgent()
         self.decision_agent = DecisionAgent()
         self.memory = ConversationMemory(max_turns=10)
+        self.use_synthesis = use_synthesis
+        self.synthesis_agent = SynthesisAgent()
 
     def clear_memory(self):
         """Clear conversation memory. Call this on session reset."""
@@ -667,11 +923,19 @@ class MultiAgentSystem:
                         "response": validated
                     })
         
+        # ── Synthesis step (quality reflection + consensus headline) ────────
+        synthesis = None
+        if self.use_synthesis and responses:
+            responses, synthesis = self.synthesis_agent.review_responses(
+                question, responses, self.agents, llm_config
+            )
+
         return {
             "approved": True,
             "monitor_message": monitor_message,
             "responses": responses,
-            "decisions": decisions
+            "decisions": decisions,
+            "synthesis": synthesis,
         }
     
     def toggle_agent(self, agent_type: str) -> bool:
