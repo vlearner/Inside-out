@@ -21,7 +21,7 @@ logger = logging.getLogger("INSIDE-OUT")
 
 # Import Jan client for LLM integration
 try:
-    from utils.jan_client import JanClient, JanClientError
+    from utils.jan_client import JanClient, JanClientError, LLMError
     JAN_AVAILABLE = True
     logger.info("✅ Jan AI client module loaded successfully")
 except ImportError as e:
@@ -88,6 +88,14 @@ class PersonalityAgent:
     # Shared Jan client instance
     _jan_client = None
     _connection_tested = False
+
+    # Maps LLMError.error_type → human-readable degraded_reason for the response payload
+    _DEGRADED_REASONS: Dict[str, str] = {
+        "connection_refused": "LLM offline",
+        "timeout": "LLM overloaded",
+        "server_error": "LLM server error",
+        "client_error": "LLM request error",
+    }
     
     @classmethod
     def get_jan_client(cls):
@@ -133,6 +141,9 @@ class PersonalityAgent:
         self.color = self.config.get("color", "white")
         self.system_prompt = self.config.get("system_prompt", "")
         self.enabled = enabled
+        # Degraded-mode state — set by get_response() when LLM falls back
+        self._degraded: bool = False
+        self._degraded_reason: str = ""
     
     def get_response(self, question: str, llm_config: Optional[Dict] = None, corrective_hint: str = "", history: Optional[list] = None) -> str:
         """
@@ -225,7 +236,19 @@ class PersonalityAgent:
                 response = f"{self.emoji} **{self.name}**: {llm_response}"
                 return response
 
+            except LLMError as e:
+                self._degraded = True
+                self._degraded_reason = self._DEGRADED_REASONS.get(e.error_type, "LLM unavailable")
+                logger.warning(
+                    f"⚠️ {tag} Step 4 — LLM error ({e.error_type}): {e}"
+                )
+                logger.warning(
+                    f"📝 {tag} Step 5 — Falling back to LOCAL static response "
+                    f"(degraded_reason={self._degraded_reason})"
+                )
             except Exception as e:
+                self._degraded = True
+                self._degraded_reason = "LLM unavailable"
                 logger.warning(
                     f"⚠️ {tag} Step 4 — Jan AI chat FAILED: {type(e).__name__}: {e}"
                 )
@@ -885,7 +908,9 @@ class MultiAgentSystem:
                 "approved": False,
                 "monitor_message": monitor_message,
                 "responses": [],
-                "decisions": {}
+                "decisions": {},
+                "degraded": False,
+                "degraded_reason": "",
             }
 
         # Retrieve conversation history *before* recording the current turn so
@@ -895,6 +920,11 @@ class MultiAgentSystem:
 
         # Record the user's turn in memory
         self.memory.add_user_message(question)
+
+        # Reset degraded state on all agents at the start of each request
+        for agent in self.agents.values():
+            agent._degraded = False
+            agent._degraded_reason = ""
 
         # If there are @mentions, those emotions respond directly
         if mentioned and len(mentioned) > 0:
@@ -922,7 +952,22 @@ class MultiAgentSystem:
                         "color": agent.color,
                         "response": validated
                     })
-        
+
+        # ── Collect degraded state across all responding agents ──────────────
+        degraded = any(
+            self.agents[r["emotion"]]._degraded
+            for r in responses
+            if r["emotion"] in self.agents
+        )
+        degraded_reason = next(
+            (
+                self.agents[r["emotion"]]._degraded_reason
+                for r in responses
+                if r["emotion"] in self.agents and self.agents[r["emotion"]]._degraded
+            ),
+            "",
+        )
+
         # ── Synthesis step (quality reflection + consensus headline) ────────
         synthesis = None
         if self.use_synthesis and responses:
@@ -936,6 +981,8 @@ class MultiAgentSystem:
             "responses": responses,
             "decisions": decisions,
             "synthesis": synthesis,
+            "degraded": degraded,
+            "degraded_reason": degraded_reason,
         }
     
     def toggle_agent(self, agent_type: str) -> bool:

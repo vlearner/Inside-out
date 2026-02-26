@@ -5,6 +5,7 @@ Provides a reusable client for connecting to Jan.ai local LLM server
 import os
 import logging
 import time
+import json
 from typing import Dict, Optional, Any, List
 import requests
 from dotenv import load_dotenv
@@ -17,6 +18,27 @@ logger = logging.getLogger("JAN-CLIENT")
 class JanClientError(Exception):
     """Custom exception for Jan.ai client errors"""
     pass
+
+
+class LLMError(JanClientError):
+    """Structured LLM error with a classified error_type.
+
+    Extends JanClientError for backwards compatibility — existing code that
+    catches JanClientError will still work unchanged.
+
+    error_type values:
+      - ``"connection_refused"`` — Jan AI server is not running.
+      - ``"timeout"``            — Jan AI is running but too slow / overloaded.
+      - ``"server_error"``       — 5xx HTTP response from Jan AI.
+      - ``"client_error"``       — 4xx HTTP response (bad request / config).
+    """
+
+    def __init__(self, message: str, error_type: str):
+        super().__init__(message)
+        self.error_type = error_type  # one of the four values above
+
+    def __str__(self) -> str:
+        return f"[{self.error_type}] {super().__str__()}"
 
 
 class JanClient:
@@ -125,6 +147,7 @@ class JanClient:
         }
 
         last_error = None
+        last_error_type = "connection_refused"
         for attempt in range(max_retries):
             try:
                 logger.info(
@@ -145,31 +168,44 @@ class JanClient:
 
             except requests.exceptions.ConnectionError as e:
                 last_error = e
-                logger.warning(
-                    f"Connection error on attempt {attempt + 1}: {e}. "
+                last_error_type = "connection_refused"
+                logger.error(
+                    f"Connection refused on attempt {attempt + 1}: {e}. "
                     f"Is Jan.ai running at {self.base_url}?"
                 )
             except requests.exceptions.Timeout as e:
                 last_error = e
+                last_error_type = "timeout"
                 logger.warning(f"Request timeout on attempt {attempt + 1}: {e}")
             except requests.exceptions.HTTPError as e:
                 last_error = e
-                logger.error(f"HTTP error: {e}")
-                # Don't retry on client errors (4xx)
                 status_code = e.response.status_code if e.response is not None else 500
                 if status_code < 500:
-                    raise JanClientError(f"API error: {e}")
+                    # 4xx — bad request or config; do NOT retry; log full payload
+                    logger.critical(
+                        f"Client error HTTP {status_code} (not retrying). "
+                        f"Full request payload: {json.dumps(payload)}"
+                    )
+                    raise LLMError(
+                        f"Client error HTTP {status_code}: {e}",
+                        error_type="client_error",
+                    )
+                # 5xx — server crash; retry
+                last_error_type = "server_error"
+                logger.warning(f"Server error HTTP {status_code} on attempt {attempt + 1}: {e}")
             except Exception as e:
                 last_error = e
+                last_error_type = "connection_refused"
                 logger.error(f"Unexpected error: {e}")
 
             if attempt < max_retries - 1:
                 time.sleep(retry_delay * (attempt + 1))
 
-        raise JanClientError(
+        raise LLMError(
             f"Failed to connect to Jan.ai after {max_retries} attempts. "
             f"Last error: {last_error}. "
-            f"Please ensure Jan.ai is running at {self.base_url}"
+            f"Please ensure Jan.ai is running at {self.base_url}",
+            error_type=last_error_type,
         )
 
     def chat(
