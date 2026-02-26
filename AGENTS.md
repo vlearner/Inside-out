@@ -94,7 +94,8 @@ User Message
               Formatted Response List
               {approved, monitor_message,
                responses[], decisions{},
-               synthesis}
+               synthesis,
+               degraded, degraded_reason}
                         │
                         ▼
             ┌───────────────────────┐
@@ -429,7 +430,31 @@ Weather responses receive an extra **250 tokens** (`weather_max_tokens = 250`) s
 
 ## 5. LLM Backend — Jan AI Client
 
-**Class:** `JanClient` — `utils/jan_client.py`
+**Class:** `JanClient` — `utils/jan_client.py`  
+**Exceptions:** `JanClientError`, `LLMError` — `utils/jan_client.py`
+
+### `LLMError` — Structured Error Classification
+
+`LLMError` extends `JanClientError` (backwards compatible) and carries an `error_type` field that classifies the failure mode so callers can choose the most helpful fallback strategy.
+
+| `error_type` | Cause | Log level |
+|---|---|---|
+| `"connection_refused"` | Jan AI server is not running at all | `ERROR` |
+| `"timeout"` | Jan AI is running but too slow / overloaded | `WARNING` |
+| `"server_error"` | 5xx HTTP response from Jan AI (crashed mid-request) | `WARNING` |
+| `"client_error"` | 4xx HTTP response — bad prompt or misconfigured API key | `CRITICAL` |
+
+```python
+from utils.jan_client import LLMError
+
+try:
+    client.chat(messages)
+except LLMError as e:
+    print(e.error_type)   # "connection_refused" | "timeout" | "server_error" | "client_error"
+    print(str(e))         # "[connection_refused] Failed to connect …"
+```
+
+`LLMError` still satisfies `isinstance(e, JanClientError)`, so existing `except JanClientError` handlers continue to work without changes.
 
 ### Singleton Pattern
 
@@ -470,21 +495,33 @@ Priority order for each value: **constructor argument → env var → class defa
 ```
 attempt 1 → failure → sleep 1 s
 attempt 2 → failure → sleep 2 s
-attempt 3 → failure → raise JanClientError
+attempt 3 → failure → raise LLMError
 ```
 
-- `ConnectionError` and `Timeout` are retried
-- HTTP **4xx** errors are **not** retried (raised immediately)
-- HTTP **5xx** errors are retried
+- `ConnectionError` → retried; logs at `ERROR`; raises `LLMError(error_type="connection_refused")`
+- `Timeout` → retried; logs at `WARNING`; raises `LLMError(error_type="timeout")`
+- HTTP **5xx** → retried; logs at `WARNING`; raises `LLMError(error_type="server_error")`
+- HTTP **4xx** → **not retried**; logs at `CRITICAL` with the full request payload for diagnostics; raises `LLMError(error_type="client_error")` immediately
 
 ### Graceful Degradation
 
-If the Jan AI server is unreachable or returns an error after all retries:
-1. `PersonalityAgent.get_jan_client()` catches the exception and sets `_jan_client = None`
-2. `get_response()` detects the `None` client and skips to **Step 5**
-3. Step 5 returns a static hardcoded fallback string
+`PersonalityAgent.get_response()` catches `LLMError` and chooses a fallback strategy based on `error_type`:
 
-The system **never crashes** due to a missing LLM — it always returns something.
+| `error_type` | `degraded_reason` set | Fallback action |
+|---|---|---|
+| `"connection_refused"` | `"LLM offline"` | Return static personality response |
+| `"timeout"` | `"LLM overloaded"` | Return static personality response |
+| `"server_error"` | `"LLM server error"` | Return static personality response |
+| `"client_error"` | `"LLM request error"` | Return static personality response (this error is logged at `CRITICAL` before reaching the agent) |
+
+Each `PersonalityAgent` instance stores the degraded state in two instance variables that are reset at the start of each `MultiAgentSystem.get_responses()` call:
+
+```python
+agent._degraded        # bool — True if this agent fell back in the last request
+agent._degraded_reason # str  — human-readable reason (see table above)
+```
+
+The system **never crashes** due to a missing LLM — it always returns a response.
 
 ### Connection Test
 
@@ -629,21 +666,29 @@ result = system.get_responses(question, mentioned=["joy"], llm_config=None)
         "fear": False,
         "disgust": False
     },
-    "synthesis": "The emotions have spoken: Joy and Anger both had something to say!"
+    "synthesis": "The emotions have spoken: Joy and Anger both had something to say!",
     # None when < 2 agents respond or use_synthesis=False
+    "degraded": False,         # True when any agent fell back to a static response
+    "degraded_reason": "",     # Human-readable reason: "LLM offline" | "LLM overloaded" |
+                               #   "LLM server error" | "LLM request error" | ""
 }
 ```
 
-When rejected by the Monitor, only `approved` and `monitor_message` are meaningful:
+**`degraded` flag behaviour:**
 
-```python
-{
-    "approved": False,
-    "monitor_message": "🚦 **Monitor**: This seems too serious ...",
-    "responses": [],
-    "decisions": {}
-}
-```
+| Scenario | `degraded` | `degraded_reason` |
+|---|---|---|
+| Healthy LLM — all agents responded via LLM | `false` | `""` |
+| Jan AI not running (connection refused) | `true` | `"LLM offline"` |
+| Jan AI too slow (timeout) | `true` | `"LLM overloaded"` |
+| Jan AI 5xx crash | `true` | `"LLM server error"` |
+| Bad request / wrong API key (4xx) | `true` | `"LLM request error"` |
+| Monitor rejection (not applicable) | `false` | `""` |
+
+The UI uses `degraded: true` to show a small orange **"● offline mode"** indicator right-aligned above the chat input — a subtle, non-intrusive signal that responses are static fallbacks. This indicator:
+- Appears automatically when the LLM goes down mid-session (detected from `degraded: true` in the response)
+- Also appears on initial page load if the LLM is unreachable (auto-detected via `test_ai_model_connection()`)
+- Disappears when the user clicks **🔌 Test Connection** in the sidebar and the LLM is back online
 
 ### Runtime Controls
 
