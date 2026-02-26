@@ -437,6 +437,15 @@ def main():
   const oldStyle = pdoc.getElementById('ac-mention-style');
   if (oldStyle) oldStyle.remove();
 
+  // Remove old event listeners from previous runs to prevent duplicate handlers
+  if (window.parent.__acMentionTextarea) {{
+    window.parent.__acMentionTextarea.removeEventListener('input', window.parent.__acMentionOnInput);
+    window.parent.__acMentionTextarea.removeEventListener('keydown', window.parent.__acMentionOnKeyDown, true);
+  }}
+  if (window.parent.__acMentionClickHandler) {{
+    pdoc.removeEventListener('click', window.parent.__acMentionClickHandler);
+  }}
+
   // Inject styles into the parent document
   const style = pdoc.createElement('style');
   style.id = 'ac-mention-style';
@@ -585,9 +594,15 @@ def main():
       clearInterval(poll);
       textarea.addEventListener('input', onInput);
       textarea.addEventListener('keydown', onKeyDown, true);
-      pdoc.addEventListener('click', (e) => {{
+      const clickHandler = (e) => {{
         if(!textarea.contains(e.target) && !dd.contains(e.target)) hideDD();
-      }});
+      }};
+      pdoc.addEventListener('click', clickHandler);
+      // Store references so they can be removed on the next Streamlit rerun
+      window.parent.__acMentionTextarea = textarea;
+      window.parent.__acMentionOnInput = onInput;
+      window.parent.__acMentionOnKeyDown = onKeyDown;
+      window.parent.__acMentionClickHandler = clickHandler;
     }}
   }}, 200);
 }})();
