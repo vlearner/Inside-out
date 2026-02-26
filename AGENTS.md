@@ -20,8 +20,10 @@ A comprehensive reference for every agent class, supporting module, and configur
 7. [Multi-Agent Orchestration](#7-multi-agent-orchestration)
 8. [Conversation Memory](#8-conversation-memory)
 9. [Output Guardrail](#9-output-guardrail)
-10. [File Map](#10-file-map)
-11. [Adding a New Agent](#11-adding-a-new-agent)
+10. [Synthesis Agent](#10-synthesis-agent)
+11. [Streamlit UI Features](#11-streamlit-ui-features)
+12. [File Map](#12-file-map)
+13. [Adding a New Agent](#13-adding-a-new-agent)
 
 ---
 
@@ -48,10 +50,10 @@ User Message
            ▼
 ┌─────────────────────┐
 │   Decision Agent    │  ← Conductor: LLM analysis → {joy, sadness, ...}
-│   (or @mention      │     falls back to keyword heuristic when LLM
-│    override)        │     is unavailable
+│   (or @mention      │     Always picks 2+; all 5 for "everyone" keywords
+│    override)        │     Falls back to keyword heuristic with escalation tiers
 └──────────┬──────────┘
-           │ emotions[] selected (1–3)
+           │ emotions[] selected (2–5; all 5 for "everyone")
            │
      ┌─────┴──────────────────────────────────┐
      │  Personality Agents (parallel queries) │
@@ -77,9 +79,22 @@ User Message
             └──────────┬────────────┘
                         │
                         ▼
+            ┌───────────────────────┐
+            │   Synthesis Agent     │  ← Post-response quality + consensus
+            │  review_responses()   │     1. Echo detection (verbatim echo)
+            │                       │     2. Length enforcement (> 3 sentences)
+            │                       │     3. Consensus headline (2+ agents)
+            │  On violation:        │
+            │   → regenerate once   │
+            │  Togglable via        │
+            │   use_synthesis flag   │
+            └──────────┬────────────┘
+                        │
+                        ▼
               Formatted Response List
               {approved, monitor_message,
-               responses[], decisions{}}
+               responses[], decisions{},
+               synthesis}
                         │
                         ▼
             ┌───────────────────────┐
@@ -152,13 +167,20 @@ monitor.check_question("What is your favourite colour?")  # (when Jan AI is down
 ### Stage 2: System Prompt (`config/personalities.py`)
 
 ```
-You are the Monitor Agent for a fun Inside Out personality chat.
+You are a fun zone monitor for a multi-personality emotion chat app (Inside Out).
+Only REJECT questions that are:
+- Harmful, hateful, or dangerous
+- Explicit or inappropriate content
+- Completely off-topic (e.g. coding help, legal advice)
 
-ALLOW: Fun, silly, lighthearted questions
-REJECT: Serious topics (politics, medical, legal, work problems, mental health)
+ALLOW questions that are:
+- Everyday concerns, worries, or personal situations (even if they sound a bit serious)
+- Weather, food, travel, relationships, school, work — these are all fair game
+- Anything an emotion like Joy, Fear, Sadness, Anger, or Disgust would hilariously react to
 
-If NOT fun: "REJECT: This is a fun zone! Try something silly instead."
-If fun: "APPROVE"
+A worried question about cold weather in Minneapolis is PERFECT for this app — Fear alone would have a field day!
+
+Reply with only: ALLOW or REJECT
 ```
 
 The LLM is called with `max_tokens=50` (only `APPROVE` / `REJECT` expected). On any LLM error or unavailability the check **fails-open** — a broken LLM never blocks the chat.
@@ -171,26 +193,39 @@ The LLM is called with `max_tokens=50` (only `APPROVE` / `REJECT` expected). On 
 
 ### Purpose
 
-The Decision Agent acts as the **conductor/orchestrator**. After the Monitor Agent approves a message, the Decision Agent determines which 1–3 emotions should respond to it.
+The Decision Agent acts as the **conductor/orchestrator**. After the Monitor Agent approves a message, the Decision Agent determines which emotions should respond. It always selects **at least 2** emotions for richer conversations, and activates **all 5** when the user addresses the group.
 
 ### LLM-Based Analysis
 
 When Jan AI is available, `analyze_message()` sends the user's message to the LLM with the `DECISION_AGENT_PROMPT` and expects a JSON response such as:
 
 ```json
-{"joy": true, "sadness": false, "anger": false, "fear": false, "disgust": false}
+{"joy": true, "sadness": false, "anger": true, "fear": false, "disgust": true}
 ```
 
 The prompt instructs the model to:
-- Pick only **1–3** most-relevant emotions
-- Route neutral/informational queries (weather, facts) to **Joy**
-- Route negative topics to relevant emotions
+- If the message contains **"everyone"**, **"all of you"**, **"you all"**, **"group"**, or **"everybody"** → set ALL five emotions to `true`
+- **Always** pick at least **2** emotions (never just 1)
+- Pick up to **3** most-relevant emotions for normal messages
+- Joy should **not** always be included — only when genuinely positive/fun/exciting
+- For neutral/informational queries → pick **Joy + Fear** (excited vs worried)
+- For opinion questions → always include **Disgust** (she has strong opinions)
+- For reflective/deep questions → include **Sadness**
+- Prefer **contrasting** emotion pairs (e.g. Joy+Fear, Anger+Disgust)
 
 Any markdown code fences (` ```json `) are stripped before JSON parsing. If parsing fails, the agent falls back to keyword heuristics.
 
 ### Fallback Keyword Heuristic
 
-Used when the LLM is unavailable or returns invalid JSON:
+Used when the LLM is unavailable or returns invalid JSON. The heuristic now uses an **escalation tier** system that guarantees at least 2 emotions always respond.
+
+#### "Everyone" Trigger Words
+
+If the message contains any of these words, **all 5 emotions** respond immediately (no keyword matching needed):
+
+`everyone`, `you all`, `all of you`, `group`, `everybody`
+
+#### Keyword Groups
 
 | Emotion | Keywords |
 |---|---|
@@ -200,7 +235,50 @@ Used when the LLM is unavailable or returns invalid JSON:
 | 😰 **Fear** | `scary`, `afraid`, `worried`, `dangerous`, `risk`, `nervous`, `what if` |
 | 🤢 **Disgust** | `gross`, `ew`, `yuck`, `cringe`, `tacky`, `ugly`, `embarrassing`, `fashion` |
 
-If **no keyword matches**, Joy responds by default (neutral questions always get a response).
+#### Escalation Tiers
+
+After keyword matching, the number of matched keyword groups determines the response tier:
+
+| Keywords matched | Agents activated | Logic |
+|---|---|---|
+| **3+** groups | **All 5** | Rich message — everyone has something to say |
+| **2** groups | **3** (matched + complement) | Add a complementary 3rd from priority list: Fear → Disgust → Sadness → Anger → Joy |
+| **1** group | **2** (matched + complement) | Add a contrasting partner: Joy↔Fear, Sadness↔Joy, Anger↔Disgust, Disgust↔Anger |
+| **0** groups | **2** (contextual pair) | `?` in message → Joy + Fear; opinion words → Disgust + Joy; otherwise → Joy + Sadness |
+
+#### Complement Pairs (1-match tier)
+
+| Sole match | Complementary partner |
+|---|---|
+| Joy | Fear |
+| Sadness | Joy |
+| Anger | Disgust |
+| Fear | Joy |
+| Disgust | Anger |
+
+#### Examples
+
+```python
+# "everyone" trigger → all 5
+_fallback_analysis("What do you all think about pizza?")
+# → {'joy': True, 'sadness': True, 'anger': True, 'fear': True, 'disgust': True}
+
+# 3+ keyword groups → all 5
+_fallback_analysis("I love this ugly scary thing")
+# → {'joy': True, 'sadness': True, 'anger': True, 'fear': True, 'disgust': True}
+
+# 2 keyword groups → 3 agents
+_fallback_analysis("I love scary movies")
+# → {'joy': True, 'fear': True, 'disgust': True}
+
+# 1 keyword group → 2 agents
+_fallback_analysis("That's so unfair")
+# → {'anger': True, 'disgust': True}
+
+# 0 keywords, question → Joy + Fear
+_fallback_analysis("What is going on?")
+# → {'joy': True, 'fear': True}
+```
 
 ### @Mention Override
 
@@ -500,11 +578,14 @@ llm_response = jan_client.chat(messages, max_tokens=weather_max_tokens)
 ### Initialisation
 
 ```python
-system = MultiAgentSystem()
+system = MultiAgentSystem(use_synthesis=True)
 # Creates: 5 × PersonalityAgent (all enabled by default)
 #          1 × MonitorAgent
 #          1 × DecisionAgent
 #          1 × ConversationMemory (max_turns=10)
+#          1 × SynthesisAgent
+# use_synthesis=True enables the post-response quality review and consensus headline.
+# Set use_synthesis=False to skip the synthesis step (no extra LLM calls).
 ```
 
 ### Full Pipeline
@@ -523,6 +604,7 @@ result = system.get_responses(question, mentioned=["joy"], llm_config=None)
 | 6 | `PersonalityAgent.get_response()` | Run for each `True` emotion that is enabled (history injected) |
 | 7 | `MultiAgentSystem._validate_response()` | Output guardrail — detect violations, regenerate or fallback |
 | 8 | `ConversationMemory.add_agent_response()` | Record each agent's raw LLM text |
+| 9 | `SynthesisAgent.review_responses()` | Quality reflection (echo/length) + consensus headline (when `use_synthesis=True`) |
 
 ### Response Format
 
@@ -546,7 +628,9 @@ result = system.get_responses(question, mentioned=["joy"], llm_config=None)
         "anger": False,
         "fear": False,
         "disgust": False
-    }
+    },
+    "synthesis": "The emotions have spoken: Joy and Anger both had something to say!"
+    # None when < 2 agents respond or use_synthesis=False
 }
 ```
 
@@ -743,17 +827,199 @@ The guardrail adds **zero latency** for passing responses (all checks are O(n) s
 
 ---
 
-## 10. File Map
+## 10. Synthesis Agent
+
+**Class:** `SynthesisAgent` — `agents/personality_agents.py`
+
+### Purpose
+
+The Synthesis Agent is a **post-response quality reviewer and consensus summariser** that runs as the final step in `MultiAgentSystem.get_responses()`, after all personality agents have replied and the output guardrail has been applied. It implements the **Generate → Critique → Regenerate** reflection pattern:
+
+1. **Quality reflection** — checks each response for echo and length violations, triggering one regeneration attempt per violation via `PersonalityAgent.get_response()`.
+2. **Consensus headline** — when 2+ agents responded, generates a short summary sentence that captures the collective emotional reaction.
+
+Both behaviours are togglable via the `use_synthesis: bool` flag on `MultiAgentSystem`. When `use_synthesis=False`, the synthesis step is skipped entirely — no extra LLM calls are made and response time is unchanged.
+
+### Quality Checks
+
+| Check | Violation type | Trigger condition |
+|---|---|---|
+| **Echo detection** | `echo` | Response text contains the user's question verbatim (case-insensitive substring match) |
+| **Length enforcement** | `length_violation` | Response text contains **more than 3 sentences** |
+
+### Corrective Hints
+
+When a violation is detected, the agent's `get_response()` is called once with a corrective hint:
+
+| Violation | Corrective hint |
+|---|---|
+| `echo` | `"IMPORTANT: Do NOT repeat or echo the user's message. React with YOUR feelings in your own words."` |
+| `length_violation` | `"IMPORTANT: Keep your response to 1-2 sentences MAXIMUM. Be brief."` |
+
+If the regenerated response also fails quality checks, or if regeneration raises an exception, the **original** response is kept.
+
+### Consensus Headline
+
+When 2+ agents responded, `generate_headline()` produces a single short sentence summarising the collective emotional reaction. It uses the LLM with `SYNTHESIS_AGENT_PROMPT` when available; otherwise falls back to a deterministic string:
+
+```python
+# Deterministic fallback examples:
+# 2 agents: "The emotions have spoken: Joy and Anger both had something to say!"
+# 3 agents: "The emotions have spoken: Joy, Anger, and Fear all chimed in!"
+```
+
+The headline is returned in the response payload as the `"synthesis"` field (a string or `None`).
+
+### System Prompt (`config/personalities.py`)
+
+```
+You are the Synthesis Agent for an Inside Out personality chat.
+
+You just received responses from multiple emotion agents. Write a single SHORT sentence
+(max 15 words) that captures the collective emotional reaction.
+
+RULES:
+- Mention each responding emotion by name
+- Highlight agreements or contrasts between them
+- Keep it playful and fun
+- Do NOT repeat the user's question
+- ONE sentence only
+
+Example:
+"The emotions are divided: Joy is thrilled, but Fear is already panicking!"
+"Joy and Anger actually agree — that's a first!"
+
+ONLY respond with the headline sentence, nothing else.
+```
+
+The LLM is called with `max_tokens=60`. On any LLM error or unavailability, the headline falls back to the deterministic format.
+
+### Interface
+
+| Method | Signature | Description |
+|---|---|---|
+| `review_responses` | `(question, response_entries, agents, llm_config) → (reviewed_entries, headline_or_none)` | Main entry point: quality-checks all responses, regenerates on violations, produces headline |
+| `generate_headline` | `(question, response_entries) → str` | Generate consensus headline (LLM or fallback) |
+| `_check_quality` | `(question, response_text) → Optional[str]` | Check for echo or length violations |
+| `_is_echo` | `(question, response_text) → bool` | Verbatim echo detection (case-insensitive) |
+
+### Logging
+
+| Event | Log level | Message |
+|---|---|---|
+| Violation detected + regeneration | `INFO` | `🔮 [Synthesis] {name} — violation: {type} — regenerating with hint` |
+| Regeneration passed | `INFO` | `🔮 [Synthesis] {name} — regeneration passed` |
+| Regeneration still violates | `WARNING` | `🔮 [Synthesis] {name} — regeneration still violates; keeping original` |
+| Regeneration raised exception | `WARNING` | `🔮 [Synthesis] {name} — regeneration raised …; keeping original` |
+| LLM headline generated | `INFO` | `🔮 [Synthesis] LLM headline: "…"` |
+| LLM headline failed | `WARNING` | `⚠️ [Synthesis] LLM headline failed (…); using fallback` |
+| Fallback headline used | `INFO` | `🔮 [Synthesis] Fallback headline: "…"` |
+
+---
+
+## 11. Streamlit UI Features
+
+**File:** `ui/streamlit_app.py`
+
+### @Mention Autocomplete
+
+The chat input features an **inline autocomplete dropdown** that appears when the user types `@` — similar to Slack, Discord, or GitHub.
+
+#### How It Works
+
+A JavaScript snippet is injected via `st.components.v1.html(height=0)` that hooks into Streamlit's native `<textarea>` element in the **parent document**:
+
+1. **Polling** — The JS polls for `textarea[data-testid="stChatInputTextArea"]` every 200ms until found
+2. **Input listener** — Monitors for `@` typed after a space (or at position 0) to start an autocomplete session
+3. **Filtering** — As the user types after `@` (e.g. `@jo`), the dropdown filters to matching personality names and keys
+4. **Keyboard navigation** — Arrow Up/Down, Tab/Enter to select, Escape to dismiss
+5. **Mouse support** — Hover to highlight, click to insert
+6. **Insertion** — Uses React's native `HTMLTextAreaElement.prototype.value` setter to update the textarea, then dispatches an `input` event so Streamlit's React internals pick up the change
+
+#### Dropdown Styling
+
+The dropdown is created as an `<div>` element in the parent Streamlit document with `position: absolute`, positioned above the chat textarea. Each item shows:
+
+```
+[emoji]  [Name in personality color]  [@key in muted text]
+```
+
+Example:
+```
+😊  Joy       @joy
+😢  Sadness   @sadness
+😠  Anger     @anger
+```
+
+#### Active Friends Only
+
+The autocomplete only shows **online** personalities (those toggled on in the sidebar). The friend list is rebuilt on every Streamlit rerun.
+
+### Colored @Mentions in Chat History
+
+When user messages are displayed, `@emotion` tokens are rendered as **colored HTML `<span>` tags** with each personality's signature color and emoji:
+
+```python
+render_colored_mention("Hello @joy!")
+# → 'Hello <span class="mention-tag" style="color:#FFD700; background:#FFD70020;">😊 @joy</span>!'
+```
+
+| Mention | Color | Background |
+|---|---|---|
+| `@joy` | `#FFD700` (gold) | `#FFD70020` |
+| `@sadness` | `#4169E1` (blue) | `#4169E120` |
+| `@anger` | `#DC143C` (crimson) | `#DC143C20` |
+| `@fear` | `#9370DB` (purple) | `#9370DB20` |
+| `@disgust` | `#228B22` (green) | `#228B2220` |
+
+### Colored Personality Names
+
+In the chat history, each agent's name in their response bubble is rendered in their personality color:
+
+```html
+<span style="color:#FFD700;font-weight:700;">Joy</span>
+```
+
+### Conversation Starters
+
+When the chat is empty (no messages), 8 pre-built **quick starter buttons** are displayed in a 2-column grid. Clicking one sends the pre-built message immediately:
+
+| Starter | Message |
+|---|---|
+| 😊 Ask Joy | `@joy What's the most fun thing to do today?` |
+| 😢 Talk to Sadness | `@sadness What makes you feel better on a bad day?` |
+| 😠 Vent with Anger | `@anger What's the most unfair thing ever?` |
+| 😨 Ask Fear | `@fear What should I be careful about today?` |
+| 🤢 Judge with Disgust | `@disgust What's the worst fashion trend right now?` |
+| 🎭 Ask Everyone | `What do you all think about pineapple on pizza?` |
+| 🌤️ Check Weather | `@joy What's the weather like in New York?` |
+| 💬 Start a Debate | `Is it better to be too hot or too cold?` |
+
+Hovering over a starter shows the full message text as a tooltip.
+
+### Online Friends Bar
+
+Below the title, a row shows:
+- **Online indicator** — Emojis of all active friends
+- **Colored mention hints** — Each `@emotion` tag in its personality color (clickable reference)
+
+---
+
+## 12. File Map
 
 ```
 Inside-out/
 ├── agents/
 │   └── personality_agents.py   # PersonalityAgent, DecisionAgent,
-│                               #   MonitorAgent, MultiAgentSystem
+│                               #   MonitorAgent, SynthesisAgent,
+│                               #   MultiAgentSystem
 │                               #   (output guardrail: _check_guardrails,
 │                               #    _validate_response)
+│                               #   DECISION_AGENT_PROMPT (escalation tiers,
+│                               #    "everyone" trigger, always 2+ emotions)
 ├── config/
-│   ├── personalities.py        # PERSONALITY_PROMPTS, MONITOR_PROMPT
+│   ├── personalities.py        # PERSONALITY_PROMPTS, MONITOR_PROMPT,
+│   │                           #   SYNTHESIS_AGENT_PROMPT
 │   └── agents.py               # (legacy config helpers)
 ├── tools/
 │   └── weather_tool.py         # is_weather_query, extract_location_from_message,
@@ -763,11 +1029,22 @@ Inside-out/
 │   │                           #   validate_environment
 │   ├── memory.py               # ConversationMemory (rolling-window history)
 │   └── weather_client.py       # WeatherClient (raw API wrapper)
-├── ui/                         # Gradio / Streamlit front-end
+├── ui/
+│   └── streamlit_app.py        # Streamlit front-end
+│                               #   Features:
+│                               #   • @mention autocomplete (JS overlay on native chat_input)
+│                               #   • Colored @mention tags in chat history (HTML spans)
+│                               #   • Colored personality names in response bubbles
+│                               #   • Conversation starter buttons (8 pre-built prompts)
+│                               #   • render_colored_mention() — HTML colored @tags
+│                               #   • Inline JS: dropdown appears on typing @, filters
+│                               #     as user types, Arrow/Tab/Enter/click to insert,
+│                               #     Escape to dismiss
 ├── tests/                      # Unit and integration tests
 │   ├── test_memory.py          # ConversationMemory + MultiAgentSystem memory tests
 │   ├── test_monitor_agent.py   # MonitorAgent tests
-│   └── test_output_guardrail.py  # OutputGuardrail tests
+│   ├── test_output_guardrail.py  # OutputGuardrail tests
+│   └── test_synthesis_agent.py # SynthesisAgent + integration tests
 ├── main.py                     # Entry point
 ├── .env.example                # Environment variable template
 └── requirements.txt
@@ -775,7 +1052,7 @@ Inside-out/
 
 ---
 
-## 11. Adding a New Agent
+## 13. Adding a New Agent
 
 Follow these steps to add a new emotion (e.g., **Surprise 😲**):
 
@@ -816,21 +1093,37 @@ self.agents: Dict[str, PersonalityAgent] = {
 
 ### Step 3 — Update the fallback keyword list in `DecisionAgent._fallback_analysis()`
 
+Add keywords to the `keyword_map` dict and update the complement pairs:
+
 ```python
 # agents/personality_agents.py — inside _fallback_analysis()
-surprise_keywords = ["unexpected", "suddenly", "wow", "whoa", "surprise",
-                     "unbelievable", "shocking", "never expected"]
 
-decisions["surprise"] = False
-for keyword in surprise_keywords:
-    if keyword in message_lower:
-        decisions["surprise"] = True
-        break
+# Add to keyword_map:
+keyword_map = {
+    # … existing entries …
+    "surprise": ["unexpected", "suddenly", "wow", "whoa", "surprise",
+                 "unbelievable", "shocking", "never expected"],
+}
+
+# Also initialise the new emotion in the decisions dict:
+decisions = {
+    "joy": False, "sadness": False, "anger": False,
+    "fear": False, "disgust": False,
+    "surprise": False,  # ← add here
+}
+
+# Add to the complement pairs (1-match tier):
+complement = {
+    # … existing pairs …
+    "surprise": "joy",   # Surprise gets paired with Joy
+}
+
+# Add to everyone_keywords if desired (optional)
 ```
 
 ### Step 4 — Update `DECISION_AGENT_PROMPT`
 
-Add the new emotion to the "Available emotions" list and the rules:
+Add the new emotion to the "Available emotions" list and add an example showing the new emotion:
 
 ```python
 DECISION_AGENT_PROMPT = """...
@@ -838,12 +1131,32 @@ Available emotions:
 - joy: ...
 - surprise: Responds to shocking, unexpected, or jaw-dropping topics
 ...
+
+Example:
+User: "I just found out I won the lottery!"
+Response: {"joy": true, "sadness": false, "anger": false, "fear": false, "disgust": false, "surprise": true}
+...
 """
 ```
 
-### Step 5 — Update UI toggles
+### Step 5 — Update UI configuration in `ui/streamlit_app.py`
 
-If the UI renders agent toggles dynamically from `get_agent_info()`, no changes are needed — the new agent will appear automatically. If toggles are hard-coded in `ui/`, add a toggle for `"surprise"`.
+Add the new emotion to the `EMOTION_FRIENDS` dict (used for colors, emojis, mention rendering, and autocomplete):
+
+```python
+EMOTION_FRIENDS = {
+    # … existing entries …
+    "surprise": {
+        "name": "Surprise",
+        "emoji": "😲",
+        "color": "#FFA500",
+        "status": "I didn't see that coming!",
+        "base_delay": 0.7,
+    },
+}
+```
+
+Also add it to `active_friends` in `initialize_session_state()`. The autocomplete, colored mentions, and sidebar toggles will pick it up automatically.
 
 ### Step 6 — Add a static fallback to `_generate_personality_response()`
 
