@@ -102,7 +102,7 @@ class TestScratchpadExecution:
         assert call_order == SCRATCHPAD_AGENT_ORDER
 
     def test_later_agents_receive_scratchpad_context(self):
-        """The second agent receives context about the first agent's response."""
+        """Sadness (second in order) receives scratchpad context from Joy's response."""
         system = _make_system(use_scratchpad=True, use_synthesis=False)
 
         system.decision_agent = MagicMock()
@@ -232,7 +232,7 @@ class TestScratchpadWithMentions:
 
         assert result["approved"] is True
         emotions = [r["emotion"] for r in result["responses"]]
-        # Only anger and disgust should respond (in scratchpad order: disgust, anger)
+        # Only anger and disgust should respond (in scratchpad order: disgust before anger)
         assert set(emotions) == {"anger", "disgust"}
 
 
