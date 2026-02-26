@@ -617,7 +617,11 @@ def main():
   }}
 
   // Poll for the textarea (it renders after this script)
+  // Stop after MAX_POLL_ATTEMPTS (~10 s) so the interval never runs forever
+  let pollAttempts = 0;
+  const MAX_POLL_ATTEMPTS = 50;
   const poll = setInterval(() => {{
+    pollAttempts++;
     textarea = findTextarea();
     if(textarea) {{
       clearInterval(poll);
@@ -632,6 +636,10 @@ def main():
       window.parent.__acMentionOnInput = onInput;
       window.parent.__acMentionOnKeyDown = onKeyDown;
       window.parent.__acMentionClickHandler = clickHandler;
+      }});
+    }} else if(pollAttempts >= MAX_POLL_ATTEMPTS) {{
+      clearInterval(poll);
+      hideDD();
     }}
   }}, 200);
 }})();
