@@ -9,6 +9,7 @@ import time
 import sys
 import os
 import re
+import json
 import html
 
 # Add project root to path
@@ -190,6 +191,39 @@ def parse_mentions(message: str) -> tuple[list, str]:
             clean_message = re.sub(pattern, '', message, flags=re.IGNORECASE).strip()
     
     return mentioned, clean_message
+
+
+def build_friends_js_payload(active_friend_keys: list, emotion_friends: dict = None) -> str:
+    """
+    Build a JSON-serialised array of autocomplete friend entries for the
+    @mention dropdown script.
+
+    Using ``json.dumps`` guarantees that all string values are properly
+    escaped, so names, emojis, or colour codes that contain quotes or
+    other special characters cannot break the injected ``<script>`` block.
+
+    Args:
+        active_friend_keys: Ordered list of emotion keys that are currently
+            enabled (e.g. ``["joy", "sadness"]``).
+        emotion_friends: Mapping of emotion key → config dict.  Defaults to
+            the module-level ``EMOTION_FRIENDS``.
+
+    Returns:
+        A JSON string such as
+        ``'[{"key": "joy", "name": "Joy", "emoji": "😊", "color": "#FFD700"}]'``.
+    """
+    if emotion_friends is None:
+        emotion_friends = EMOTION_FRIENDS
+    payload = [
+        {
+            "key": key,
+            "name": emotion_friends[key]["name"],
+            "emoji": emotion_friends[key]["emoji"],
+            "color": emotion_friends[key]["color"],
+        }
+        for key in active_friend_keys
+    ]
+    return json.dumps(payload)
 
 
 def initialize_session_state():
@@ -414,15 +448,9 @@ def main():
     # ── Chat Input with @Mention Autocomplete ──
     active_friends = [e for e, a in st.session_state.active_friends.items() if a]
 
-    # Inject JS that enhances the native st.chat_input with an @mention autocomplete
-    _friends_js = []
-    for key in active_friends:
-        f = EMOTION_FRIENDS[key]
-        _friends_js.append(
-            f'{{"key":"{key}","name":"{f["name"]}",'
-            f'"emoji":"{f["emoji"]}","color":"{f["color"]}"}}'
-        )
-    _friends_js_str = "[" + ",".join(_friends_js) + "]"
+    # Serialise via the helper — json.dumps ensures all values are properly
+    # escaped so no injection risk from special characters.
+    _friends_js_str = build_friends_js_payload(active_friends)
 
     import streamlit.components.v1 as components
     components.html(f"""
