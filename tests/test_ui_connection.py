@@ -212,6 +212,105 @@ class TestJanClientTestConnection:
 
 
 # ============================================================================
+# build_friends_js_payload() Tests
+# ============================================================================
+
+class TestBuildFriendsJsPayload:
+    """Tests for build_friends_js_payload — JSON-safe friends list for the autocomplete script."""
+
+    def _fn(self):
+        from ui.streamlit_app import build_friends_js_payload
+        return build_friends_js_payload
+
+    def test_returns_valid_json(self):
+        """Output must always be parseable JSON."""
+        import json
+        build = self._fn()
+        result = build(["joy", "sadness"])
+        parsed = json.loads(result)  # raises if invalid
+        assert isinstance(parsed, list)
+
+    def test_all_active_friends_included(self):
+        """Every key in active_friend_keys must appear in the output."""
+        import json
+        build = self._fn()
+        keys = ["joy", "anger", "fear"]
+        parsed = json.loads(build(keys))
+        result_keys = [item["key"] for item in parsed]
+        assert result_keys == keys
+
+    def test_entry_has_required_fields(self):
+        """Each entry must have key, name, emoji, and color."""
+        import json
+        build = self._fn()
+        parsed = json.loads(build(["joy"]))
+        entry = parsed[0]
+        assert "key" in entry
+        assert "name" in entry
+        assert "emoji" in entry
+        assert "color" in entry
+
+    def test_empty_list_returns_empty_json_array(self):
+        """No active friends → empty JSON array, not a broken string."""
+        import json
+        build = self._fn()
+        result = build([])
+        assert json.loads(result) == []
+
+    def test_special_characters_are_escaped(self):
+        """Names/colors with quotes or backslashes must be safely escaped."""
+        import json
+        build = self._fn()
+        evil_friends = {
+            "x": {
+                "name": 'Joy"Evil\\',
+                "emoji": "😊",
+                "color": "#FF'00",
+            }
+        }
+        result = build(["x"], emotion_friends=evil_friends)
+        # Must still parse cleanly — no injection
+        parsed = json.loads(result)
+        assert parsed[0]["name"] == 'Joy"Evil\\'
+        assert parsed[0]["color"] == "#FF'00"
+
+    def test_no_raw_quotes_break_script_embedding(self):
+        """The output must not contain unescaped double-quotes inside values."""
+        import json
+        build = self._fn()
+        tricky_friends = {
+            "q": {
+                "name": 'Has"Quote',
+                "emoji": "🔥",
+                "color": "#000",
+            }
+        }
+        result = build(["q"], emotion_friends=tricky_friends)
+        # Re-parse to confirm round-trip integrity
+        parsed = json.loads(result)
+        assert parsed[0]["name"] == 'Has"Quote'
+
+    def test_uses_emotion_friends_module_constant_by_default(self):
+        """Without an explicit emotion_friends arg, EMOTION_FRIENDS is used."""
+        import json
+        from ui.streamlit_app import EMOTION_FRIENDS
+        build = self._fn()
+        result = build(["joy"])
+        parsed = json.loads(result)
+        assert parsed[0]["name"] == EMOTION_FRIENDS["joy"]["name"]
+        assert parsed[0]["emoji"] == EMOTION_FRIENDS["joy"]["emoji"]
+        assert parsed[0]["color"] == EMOTION_FRIENDS["joy"]["color"]
+
+    def test_ordering_preserved(self):
+        """Friends must appear in the same order as active_friend_keys."""
+        import json
+        build = self._fn()
+        keys = ["disgust", "fear", "joy"]
+        parsed = json.loads(build(keys))
+        assert [e["key"] for e in parsed] == keys
+
+
+# ============================================================================
 # Runner (no pytest)
 # ============================================================================
 
