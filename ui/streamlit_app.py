@@ -9,6 +9,7 @@ import time
 import sys
 import os
 import re
+import html
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -130,7 +131,7 @@ CONVERSATION_STARTERS = [
 
 def render_colored_mention(text: str) -> str:
     """Replace @emotion tokens with colored HTML <span> tags."""
-    result = text
+    result = html.escape(text)
     for emotion, config in EMOTION_FRIENDS.items():
         pattern = rf'@{emotion}\b'
         colored_span = (
