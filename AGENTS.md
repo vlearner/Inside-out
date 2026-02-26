@@ -685,20 +685,10 @@ result = system.get_responses(question, mentioned=["joy"], llm_config=None)
 | Bad request / wrong API key (4xx) | `true` | `"LLM request error"` |
 | Monitor rejection (not applicable) | `false` | `""` |
 
-The UI can use `degraded: true` to show a single system-level banner — *"⚠️ Running in offline mode — responses are static."* — rather than letting multiple static responses silently masquerade as real LLM outputs.
-
-When rejected by the Monitor, only `approved` and `monitor_message` are meaningful:
-
-```python
-{
-    "approved": False,
-    "monitor_message": "🚦 **Monitor**: This seems too serious ...",
-    "responses": [],
-    "decisions": {},
-    "degraded": False,
-    "degraded_reason": "",
-}
-```
+The UI uses `degraded: true` to show a small orange **"● offline mode"** indicator right-aligned above the chat input — a subtle, non-intrusive signal that responses are static fallbacks. This indicator:
+- Appears automatically when the LLM goes down mid-session (detected from `degraded: true` in the response)
+- Also appears on initial page load if the LLM is unreachable (auto-detected via `test_ai_model_connection()`)
+- Disappears when the user clicks **🔌 Test Connection** in the sidebar and the LLM is back online
 
 ### Runtime Controls
 

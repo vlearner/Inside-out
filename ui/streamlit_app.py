@@ -253,6 +253,10 @@ def initialize_session_state():
     if "send_message" not in st.session_state:
         st.session_state.send_message = None
 
+    if "llm_connected" not in st.session_state:
+        status = test_ai_model_connection()
+        st.session_state.llm_connected = status["connected"]
+
 
 def get_single_response(agent_system, emotion: str, message: str):
     """Get response from a single emotion agent"""
@@ -297,12 +301,14 @@ def main():
         if st.button("🔌 Test AI Model Connection", use_container_width=True):
             with st.spinner("Testing connection to Jan AI server..."):
                 status = test_ai_model_connection()
+            st.session_state.llm_connected = status["connected"]
             if status["connected"]:
                 st.success(
                     f"✅ Connected!\n\n"
                     f"**Model:** {status['model']}\n\n"
                     f"**URL:** {status['base_url']}"
                 )
+                st.rerun()
             else:
                 st.error(
                     f"❌ Connection failed\n\n"
@@ -347,7 +353,8 @@ def main():
     
     # === MAIN CONTENT ===
     st.title("🎭 Inside Out Friends Chat")
-    
+
+
     # Online friends display
     active_friends_list = [e for e, a in st.session_state.active_friends.items() if a]
     if active_friends_list:
@@ -443,7 +450,18 @@ def main():
         
         st.rerun()
     
-    st.divider()
+    # ── Small offline dot above chat input (only when LLM is down) ──
+    if not st.session_state.llm_connected:
+        st.markdown(
+            '<div style="text-align:right;padding:0 4px 2px 0;">'
+            '<span style="display:inline-flex;align-items:center;gap:4px;'
+            'font-size:0.75em;color:#ff9800;opacity:0.9;">'
+            '<span style="display:inline-block;width:8px;height:8px;'
+            'border-radius:50%;background:#ff9800;"></span>'
+            'offline mode'
+            '</span></div>',
+            unsafe_allow_html=True,
+        )
 
     # ── Chat Input with @Mention Autocomplete ──
     active_friends = [e for e, a in st.session_state.active_friends.items() if a]
@@ -674,7 +692,11 @@ def main():
         
         # Get responses via Decision Agent
         result = agent_system.get_responses(user_input, mentioned=mentioned if mentioned else None)
-        
+
+        # Auto-detect LLM going offline from degraded responses
+        if result.get("degraded"):
+            st.session_state.llm_connected = False
+
         if not result["approved"]:
             if "**Monitor**:" in result["monitor_message"]:
                 msg = result["monitor_message"].split("**Monitor**:")[-1].strip()
