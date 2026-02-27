@@ -477,9 +477,20 @@ class MonitorAgent:
         self.name = "Monitor"
         self.system_prompt = MONITOR_PROMPT
     
+    # Clarification prompt returned when the monitor is uncertain.
+    CLARIFICATION_PROMPT = (
+        "🤔 Hmm, this might be getting a little serious — are you asking for fun, "
+        "or do you need real help? We're a fun zone here! Try rephrasing with a silly spin! 🎭"
+    )
+
     def check_question(self, question: str, llm_config: Optional[Dict] = None) -> tuple[bool, str]:
         """
         Check if a question is appropriate for this fun system.
+
+        Three-state verdict:
+          * ``(True, message)``  — approved
+          * ``(False, message)`` — rejected
+          * ``(None, message)``  — uncertain (clarification needed)
 
         Two-stage check:
           Stage 1 — Fast pre-check (no LLM call):
@@ -487,10 +498,12 @@ class MonitorAgent:
             * Length check: reject messages that are too short.
           Stage 2 — Semantic LLM check:
             * If the pre-check passes, ask the LLM using MONITOR_PROMPT.
+            * The LLM may return ALLOW, REJECT, or UNCERTAIN.
             * Falls back to approving (fail-open) when the LLM is unavailable
               or raises an exception, so a broken LLM never blocks the chat.
 
         Returns: (is_approved, message)
+            is_approved is True (approved), False (rejected), or None (uncertain).
         """
         serious_keywords = [
             'depressed', 'suicide', 'kill', 'die', 'death', 'war', 'politics',
@@ -521,8 +534,12 @@ class MonitorAgent:
                 ]
                 response = jan_client.chat(messages, max_tokens=50)
                 logger.info(f"🚦 [Monitor] Stage 2 — LLM response: '{response}'")
-                if "REJECT" in response.upper():
+                response_upper = response.upper()
+                if "REJECT" in response_upper:
                     return False, "🚦 **Monitor**: This seems too serious for our fun zone! Try something silly instead! 😄"
+                if "UNCERTAIN" in response_upper:
+                    logger.info("🚦 [Monitor] Stage 2 — LLM is uncertain; requesting clarification")
+                    return None, self.CLARIFICATION_PROMPT
             except Exception as e:
                 logger.warning(
                     f"⚠️ [Monitor] Stage 2 — LLM check failed ({type(e).__name__}: {e}); "
@@ -906,9 +923,23 @@ class MultiAgentSystem:
         """
         is_approved, monitor_message = self.monitor.check_question(question, llm_config)
         
+        # ── Uncertain: request clarification (HITL gate) ─────────────────
+        if is_approved is None:
+            return {
+                "approved": False,
+                "status": "clarification_needed",
+                "monitor_message": monitor_message,
+                "clarification_prompt": monitor_message,
+                "responses": [],
+                "decisions": {},
+                "degraded": False,
+                "degraded_reason": "",
+            }
+
         if not is_approved:
             return {
                 "approved": False,
+                "status": "rejected",
                 "monitor_message": monitor_message,
                 "responses": [],
                 "decisions": {},
@@ -1029,6 +1060,7 @@ class MultiAgentSystem:
 
         return {
             "approved": True,
+            "status": "approved",
             "monitor_message": monitor_message,
             "responses": responses,
             "decisions": decisions,

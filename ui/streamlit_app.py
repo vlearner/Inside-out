@@ -419,6 +419,8 @@ def main():
                     st.write(msg["content"])
             elif msg["role"] == "system":
                 st.warning(f"🚦 {msg['content']}")
+            elif msg["role"] == "clarification":
+                st.info(f"{msg['content']}")
             elif msg["role"] == "decision":
                 st.caption(f"🧠 {msg['content']}")
     
@@ -698,6 +700,15 @@ def main():
             st.session_state.llm_connected = False
 
         if not result["approved"]:
+            # ── Clarification needed (HITL soft rejection) ───────────────
+            if result.get("status") == "clarification_needed":
+                st.session_state.messages.append({
+                    "role": "clarification",
+                    "content": result.get("clarification_prompt", result["monitor_message"]),
+                })
+                st.rerun()
+
+            # ── Hard rejection ───────────────────────────────────────────
             if "**Monitor**:" in result["monitor_message"]:
                 msg = result["monitor_message"].split("**Monitor**:")[-1].strip()
             else:
