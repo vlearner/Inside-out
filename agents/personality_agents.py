@@ -6,8 +6,10 @@ import logging
 import sys
 import json
 import re
+import time
 from typing import Dict, List, Optional
 from config.personalities import PERSONALITY_PROMPTS, MONITOR_PROMPT, SYNTHESIS_AGENT_PROMPT
+from config.agents import SCRATCHPAD_AGENT_ORDER
 from utils.memory import ConversationMemory
 
 # Configure logging to show in terminal with more detail
@@ -751,7 +753,7 @@ class MultiAgentSystem:
         "hopeless", "gloomy", "miserable", "grief", "sorrow",
     ]
     
-    def __init__(self, use_synthesis: bool = True):
+    def __init__(self, use_synthesis: bool = True, use_scratchpad: bool = False):
         self.agents: Dict[str, PersonalityAgent] = {
             "joy": PersonalityAgent("joy", enabled=True),
             "sadness": PersonalityAgent("sadness", enabled=True),
@@ -763,6 +765,7 @@ class MultiAgentSystem:
         self.decision_agent = DecisionAgent()
         self.memory = ConversationMemory(max_turns=10)
         self.use_synthesis = use_synthesis
+        self.use_scratchpad = use_scratchpad
         self.synthesis_agent = SynthesisAgent()
 
     def clear_memory(self):
@@ -936,13 +939,35 @@ class MultiAgentSystem:
         
         # Get responses from decided agents
         responses = []
-        for agent_type, should_respond in decisions.items():
-            agent = self.agents.get(agent_type)
-            if agent and agent.enabled and should_respond:
-                response = agent.get_response(question, llm_config, corrective_hint="", history=history)
+        if self.use_scratchpad:
+            # ── Scratchpad mode: sequential execution in configured order ────
+            scratchpad_start = time.time()
+            scratchpad_entries: List[str] = []
+            for agent_type in SCRATCHPAD_AGENT_ORDER:
+                if not decisions.get(agent_type):
+                    continue
+                agent = self.agents.get(agent_type)
+                if not agent or not agent.enabled:
+                    continue
+
+                # Build lightweight scratchpad context from prior agents
+                scratchpad_context = ""
+                if scratchpad_entries:
+                    scratchpad_context = (
+                        "\n\n" + "\n".join(scratchpad_entries)
+                        + "\n\nNow respond in YOUR voice, reacting to what "
+                        "the other emotions said if it's relevant."
+                    )
+
+                augmented_question = question + scratchpad_context
+                response = agent.get_response(
+                    augmented_question, llm_config,
+                    corrective_hint="", history=history,
+                )
                 if response:
-                    validated = self._validate_response(agent, response, question, llm_config)
-                    # Record the raw LLM text (without the "emoji **Name**:" prefix)
+                    validated = self._validate_response(
+                        agent, response, question, llm_config,
+                    )
                     raw_text = self._extract_response_text(validated)
                     self.memory.add_agent_response(agent.name, raw_text)
                     responses.append({
@@ -950,8 +975,35 @@ class MultiAgentSystem:
                         "emotion": agent_type,
                         "emoji": agent.emoji,
                         "color": agent.color,
-                        "response": validated
+                        "response": validated,
                     })
+                    scratchpad_entries.append(
+                        f"[{agent.name} already responded: '{raw_text}']"
+                    )
+
+            elapsed = time.time() - scratchpad_start
+            logger.info(
+                f"📋 [Scratchpad] Sequential execution finished in {elapsed:.2f}s "
+                f"({len(responses)} agents responded)"
+            )
+        else:
+            # ── Default mode: agents respond independently ───────────────────
+            for agent_type, should_respond in decisions.items():
+                agent = self.agents.get(agent_type)
+                if agent and agent.enabled and should_respond:
+                    response = agent.get_response(question, llm_config, corrective_hint="", history=history)
+                    if response:
+                        validated = self._validate_response(agent, response, question, llm_config)
+                        # Record the raw LLM text (without the "emoji **Name**:" prefix)
+                        raw_text = self._extract_response_text(validated)
+                        self.memory.add_agent_response(agent.name, raw_text)
+                        responses.append({
+                            "agent": agent.name,
+                            "emotion": agent_type,
+                            "emoji": agent.emoji,
+                            "color": agent.color,
+                            "response": validated
+                        })
 
         # ── Collect degraded state across all responding agents ──────────────
         degraded = any(

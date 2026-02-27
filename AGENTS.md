@@ -24,6 +24,7 @@ A comprehensive reference for every agent class, supporting module, and configur
 11. [Streamlit UI Features](#11-streamlit-ui-features)
 12. [File Map](#12-file-map)
 13. [Adding a New Agent](#13-adding-a-new-agent)
+14. [Shared Scratchpad (Inter-Agent Communication)](#14-shared-scratchpad-inter-agent-communication)
 
 ---
 
@@ -615,7 +616,7 @@ llm_response = jan_client.chat(messages, max_tokens=weather_max_tokens)
 ### Initialisation
 
 ```python
-system = MultiAgentSystem(use_synthesis=True)
+system = MultiAgentSystem(use_synthesis=True, use_scratchpad=False)
 # Creates: 5 × PersonalityAgent (all enabled by default)
 #          1 × MonitorAgent
 #          1 × DecisionAgent
@@ -623,6 +624,9 @@ system = MultiAgentSystem(use_synthesis=True)
 #          1 × SynthesisAgent
 # use_synthesis=True enables the post-response quality review and consensus headline.
 # Set use_synthesis=False to skip the synthesis step (no extra LLM calls).
+# use_scratchpad=False (default) runs agents independently (parallel).
+# Set use_scratchpad=True to enable sequential execution with shared scratchpad
+# context — each agent sees what prior agents said and can react to it.
 ```
 
 ### Full Pipeline
@@ -638,7 +642,7 @@ result = system.get_responses(question, mentioned=["joy"], llm_config=None)
 | 3 | `ConversationMemory.add_user_message()` | Record the current user turn |
 | 4 | `@mention` check | If present, set decisions directly (bypass step 5) |
 | 5 | `DecisionAgent.analyze_message()` | LLM → JSON decisions (or keyword fallback) |
-| 6 | `PersonalityAgent.get_response()` | Run for each `True` emotion that is enabled (history injected) |
+| 6 | `PersonalityAgent.get_response()` | Run for each `True` emotion that is enabled (history injected). When `use_scratchpad=True`, agents run sequentially in `SCRATCHPAD_AGENT_ORDER` and each receives a scratchpad context from prior agents. When `False`, agents run independently. |
 | 7 | `MultiAgentSystem._validate_response()` | Output guardrail — detect violations, regenerate or fallback |
 | 8 | `ConversationMemory.add_agent_response()` | Record each agent's raw LLM text |
 | 9 | `SynthesisAgent.review_responses()` | Quality reflection (echo/length) + consensus headline (when `use_synthesis=True`) |
@@ -1065,7 +1069,8 @@ Inside-out/
 ├── config/
 │   ├── personalities.py        # PERSONALITY_PROMPTS, MONITOR_PROMPT,
 │   │                           #   SYNTHESIS_AGENT_PROMPT
-│   └── agents.py               # (legacy config helpers)
+│   └── agents.py               # SCRATCHPAD_AGENT_ORDER (execution order
+│                               #   for scratchpad mode)
 ├── tools/
 │   └── weather_tool.py         # is_weather_query, extract_location_from_message,
 │                               #   get_weather, get_forecast
@@ -1089,7 +1094,8 @@ Inside-out/
 │   ├── test_memory.py          # ConversationMemory + MultiAgentSystem memory tests
 │   ├── test_monitor_agent.py   # MonitorAgent tests
 │   ├── test_output_guardrail.py  # OutputGuardrail tests
-│   └── test_synthesis_agent.py # SynthesisAgent + integration tests
+│   ├── test_synthesis_agent.py # SynthesisAgent + integration tests
+│   └── test_scratchpad.py      # Shared Scratchpad tests
 ├── main.py                     # Entry point
 ├── .env.example                # Environment variable template
 └── requirements.txt
@@ -1212,3 +1218,75 @@ personality_responses = {
     "surprise": "Wait — I did NOT see that coming! 😲",
 }
 ```
+
+---
+
+## 14. Shared Scratchpad (Inter-Agent Communication)
+
+**Config:** `config/agents.py` — `SCRATCHPAD_AGENT_ORDER`  
+**Implementation:** `MultiAgentSystem` — `agents/personality_agents.py`
+
+### Purpose
+
+By default, personality agents respond independently — none of them know what the others are saying. The **Shared Scratchpad** pattern introduces sequential execution with inter-agent context: each agent sees what the previous agents said and can react to it, creating the appearance of a group conversation — much like the emotions argue and riff off each other in the film.
+
+### Design
+
+| Property | Value |
+|---|---|
+| Flag | `use_scratchpad: bool` on `MultiAgentSystem.__init__()` |
+| Default | `False` (original independent mode) |
+| Execution order | Defined in `config/agents.py` → `SCRATCHPAD_AGENT_ORDER` |
+
+### Execution Order
+
+The order reflects the emotional arc of the film — Joy leads, Anger anchors:
+
+```python
+SCRATCHPAD_AGENT_ORDER = ["joy", "sadness", "fear", "disgust", "anger"]
+```
+
+Only agents that are **both decided and enabled** participate. Agents not in the decision set are skipped.
+
+### Context Injection
+
+Each agent (except the first) receives a lightweight scratchpad context appended to the user's message:
+
+```
+[Joy already responded: 'Ooh, I love that! ✨']
+[Sadness already responded: '*sigh* That's bittersweet...']
+
+Now respond in YOUR voice, reacting to what the other emotions said if it's relevant.
+```
+
+The context grows as each agent responds. The first agent in the order receives the original question without any scratchpad context.
+
+### Performance
+
+Scratchpad mode is **sequential** — each agent must wait for the previous one to finish. Total execution time is logged automatically:
+
+```
+📋 [Scratchpad] Sequential execution finished in 4.32s (3 agents responded)
+```
+
+The original independent mode remains the default for users who prefer faster responses.
+
+### Usage
+
+```python
+# Independent mode (default — unchanged behaviour)
+system = MultiAgentSystem(use_scratchpad=False)
+result = system.get_responses("What's the best pizza topping?")
+
+# Scratchpad mode (sequential with inter-agent context)
+system = MultiAgentSystem(use_scratchpad=True)
+result = system.get_responses("What do you all think about pineapple on pizza?")
+# Each agent's response references what the previous agents said
+```
+
+### Compatibility
+
+- **@mentions** still work in scratchpad mode — only the mentioned agents participate, but they execute in scratchpad order rather than mention order.
+- **Output guardrails** and **synthesis** still run after the scratchpad loop.
+- **Conversation memory** records each agent's raw response as before.
+- When `use_scratchpad=False`, behaviour is identical to the original implementation.
