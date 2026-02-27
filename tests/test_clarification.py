@@ -95,13 +95,14 @@ class TestClarificationPayload:
             MonitorAgent.CLARIFICATION_PROMPT,
         )
         system.decision_agent = MagicMock()
+        for agent in system.agents.values():
+            agent.get_response = MagicMock()
 
         system.get_responses("Ambiguous message")
 
         system.decision_agent.analyze_message.assert_not_called()
         for agent in system.agents.values():
-            if hasattr(agent.get_response, "assert_not_called"):
-                agent.get_response.assert_not_called()
+            agent.get_response.assert_not_called()
 
     def test_clarification_payload_has_degraded_fields(self):
         """Even clarification responses include degraded/degraded_reason."""
