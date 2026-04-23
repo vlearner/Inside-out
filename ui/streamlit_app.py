@@ -16,7 +16,7 @@ import html
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents import MultiAgentSystem
-from utils.jan_client import JanClient, JanClientError
+from utils.llm_client import LLMClient, LLMClientError
 
 # Page configuration
 st.set_page_config(
@@ -146,23 +146,26 @@ def render_colored_mention(text: str) -> str:
 
 def test_ai_model_connection() -> dict:
     """
-    Test connectivity to the Jan AI server and return status details.
+    Test connectivity to the configured LLM backend and return status details.
 
     Returns:
-        dict with keys: connected (bool), model (str), base_url (str), error (str|None)
+        dict with keys:
+            connected (bool), provider (str), model (str), base_url (str), error (str|None)
     """
     try:
-        client = JanClient()
+        client = LLMClient()
         connected = client.test_connection()
         return {
             "connected": connected,
+            "provider": client.provider,
             "model": client.model_name,
             "base_url": client.base_url,
             "error": None if connected else "Server is not responding",
         }
-    except JanClientError as exc:
+    except LLMClientError as exc:
         return {
             "connected": False,
+            "provider": "N/A",
             "model": "N/A",
             "base_url": "N/A",
             "error": str(exc),
@@ -170,6 +173,7 @@ def test_ai_model_connection() -> dict:
     except Exception as exc:
         return {
             "connected": False,
+            "provider": "N/A",
             "model": "N/A",
             "base_url": "N/A",
             "error": str(exc),
@@ -299,12 +303,13 @@ def main():
         
         # --- Test AI Model Connection ---
         if st.button("🔌 Test AI Model Connection", use_container_width=True):
-            with st.spinner("Testing connection to Jan AI server..."):
+            with st.spinner("Testing connection to configured LLM backend..."):
                 status = test_ai_model_connection()
             st.session_state.llm_connected = status["connected"]
             if status["connected"]:
                 st.success(
                     f"✅ Connected!\n\n"
+                    f"**Provider:** {status['provider']}\n\n"
                     f"**Model:** {status['model']}\n\n"
                     f"**URL:** {status['base_url']}"
                 )
@@ -313,7 +318,7 @@ def main():
                 st.error(
                     f"❌ Connection failed\n\n"
                     f"**Error:** {status['error']}\n\n"
-                    f"Make sure Jan AI server is running."
+                    f"Check your LLM provider configuration and connectivity."
                 )
 
         st.divider()

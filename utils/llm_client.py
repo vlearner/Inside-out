@@ -1,6 +1,6 @@
 """
-Jan.ai API Client Wrapper
-Provides a reusable client for connecting to Jan.ai local LLM server
+OpenAI-compatible API client wrapper.
+Supports both local LLM backend and Groq Cloud backends.
 """
 import os
 import logging
@@ -12,24 +12,24 @@ from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("JAN-CLIENT")
+logger = logging.getLogger("LLM-CLIENT")
 
 
-class JanClientError(Exception):
-    """Custom exception for Jan.ai client errors"""
+class LLMClientError(Exception):
+    """Custom exception for LLM backend client errors"""
     pass
 
 
-class LLMError(JanClientError):
+class LLMError(LLMClientError):
     """Structured LLM error with a classified error_type.
 
-    Extends JanClientError for backwards compatibility — existing code that
-    catches JanClientError will still work unchanged.
+    Extends LLMClientError for backwards compatibility — existing code that
+    catches LLMClientError will still work unchanged.
 
     error_type values:
-      - ``"connection_refused"`` — Jan AI server is not running.
-      - ``"timeout"``            — Jan AI is running but too slow / overloaded.
-      - ``"server_error"``       — 5xx HTTP response from Jan AI.
+      - ``"connection_refused"`` — LLM backend server is not running.
+      - ``"timeout"``            — LLM backend is running but too slow / overloaded.
+      - ``"server_error"``       — 5xx HTTP response from LLM backend.
       - ``"client_error"``       — 4xx HTTP response (bad request / config).
     """
 
@@ -41,68 +41,102 @@ class LLMError(JanClientError):
         return f"[{self.error_type}] {super().__str__()}"
 
 
-class JanClient:
+class LLMClient:
     """
-    Jan.ai API Client for making LLM requests
+    OpenAI-compatible API client for making LLM requests.
 
-    This client wraps the Jan.ai local server API and provides
+    This client supports LLM backend (local) and Groq (cloud) and provides
     methods for chat completions with retry logic and error handling.
     """
 
     # Default fallback values — override via env vars or constructor kwargs
-    # NOTE: DEFAULT_API_KEY is intentionally empty.
-    #       Set JAN_API_KEY in your .env file (see .env.example).
+    # NOTE: API keys are intentionally empty by default.
+    #       Set JAN_API_KEY / GROQ_API_KEY in your .env file (see .env.example).
+    DEFAULT_PROVIDER = "jan"
+    SUPPORTED_PROVIDERS = {"jan", "groq"}
     DEFAULT_BASE_URL = "http://127.0.0.1:1337/v1"
     DEFAULT_API_KEY = ""          # no key hardcoded — must come from .env
     DEFAULT_MODEL = "Meta-Llama-3_1-8B-Instruct_Q4_K_M"
+    DEFAULT_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+    DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
 
     def __init__(
         self,
+        provider: Optional[str] = None,
         base_url: Optional[str] = None,
         api_key: Optional[str] = None,
         model_name: Optional[str] = None,
     ):
         """
-        Initialize the Jan.ai client.
+        Initialize the LLM backend client.
 
         Priority order for each value:
           1. Explicit constructor argument
-          2. Environment variable  (JAN_BASE_URL / JAN_API_KEY / JAN_MODEL_NAME)
+          2. Environment variable (LLM_PROVIDER + provider-specific vars)
           3. Class-level default constant
 
         This means you can override any value in tests or scripts without
         touching environment variables:
 
-            client = JanClient(api_key="my-key", model_name="mistral-7b")
+            client = LLMClient(api_key="my-key", model_name="mistral-7b")
         """
         load_dotenv()
+
+        self.provider = (
+            provider
+            if provider is not None
+            else os.getenv("LLM_PROVIDER", self.DEFAULT_PROVIDER)
+        ).strip().lower()
+
+        if self.provider not in self.SUPPORTED_PROVIDERS:
+            raise LLMClientError(
+                f"Unsupported LLM_PROVIDER '{self.provider}'. "
+                f"Supported values: {', '.join(sorted(self.SUPPORTED_PROVIDERS))}."
+            )
+
+        if self.provider == "groq":
+            env_base_url = os.getenv("GROQ_BASE_URL", self.DEFAULT_GROQ_BASE_URL)
+            env_api_key = os.getenv("GROQ_API_KEY", self.DEFAULT_API_KEY)
+            env_model = os.getenv("GROQ_MODEL_NAME", self.DEFAULT_GROQ_MODEL)
+        else:
+            env_base_url = os.getenv("JAN_BASE_URL", self.DEFAULT_BASE_URL)
+            env_api_key = os.getenv("JAN_API_KEY", self.DEFAULT_API_KEY)
+            env_model = os.getenv("JAN_MODEL_NAME", self.DEFAULT_MODEL)
 
         self.base_url = (
             base_url
             if base_url is not None
-            else os.getenv("JAN_BASE_URL", self.DEFAULT_BASE_URL)
+            else env_base_url
         )
         self.api_key = (
             api_key
             if api_key is not None
-            else os.getenv("JAN_API_KEY", self.DEFAULT_API_KEY)
+            else env_api_key
         )
         self.model_name = (
             model_name
             if model_name is not None
-            else os.getenv("JAN_MODEL_NAME", self.DEFAULT_MODEL)
+            else env_model
         )
         self.temperature = float(os.getenv("TEMPERATURE", "0.8"))
         self.max_tokens = int(os.getenv("MAX_TOKENS", "500"))
 
         self._validate_config()
-        logger.info(f"JanClient initialized with base URL: {self.base_url}")
+        logger.info(
+            f"LLMClient initialized with provider={self.provider}, "
+            f"base URL={self.base_url}, model={self.model_name}"
+        )
 
     def _validate_config(self) -> None:
         """Validate that required configuration is present"""
         if not self.base_url:
-            raise JanClientError(
-                "JAN_BASE_URL not set. Please configure your .env file."
+            raise LLMClientError(
+                "LLM base URL not set. Please configure your .env file."
+            )
+        if self.provider == "groq" and not self.api_key:
+            raise LLMClientError(
+                "GROQ_API_KEY not set while LLM_PROVIDER=groq. "
+                "Please configure your .env file."
             )
         logger.debug("Configuration validated successfully")
 
@@ -115,7 +149,7 @@ class JanClient:
         retry_delay: float = 1.0
     ) -> Dict[str, Any]:
         """
-        Make a chat completion request to Jan.ai with retry logic
+        Make a chat completion request to LLM backend with retry logic
 
         Args:
             messages: List of message dicts with 'role' and 'content'
@@ -128,7 +162,7 @@ class JanClient:
             Response dictionary from the API
 
         Raises:
-            JanClientError: If request fails after all retries
+            LLMClientError: If request fails after all retries
         """
         url = f"{self.base_url}/chat/completions"
 
@@ -171,7 +205,7 @@ class JanClient:
                 last_error_type = "connection_refused"
                 logger.error(
                     f"Connection refused on attempt {attempt + 1}: {e}. "
-                    f"Is Jan.ai running at {self.base_url}?"
+                    f"Is the LLM server running at {self.base_url}?"
                 )
             except requests.exceptions.Timeout as e:
                 last_error = e
@@ -202,9 +236,9 @@ class JanClient:
                 time.sleep(retry_delay * (attempt + 1))
 
         raise LLMError(
-            f"Failed to connect to Jan.ai after {max_retries} attempts. "
+            f"Failed to connect to LLM backend after {max_retries} attempts. "
             f"Last error: {last_error}. "
-            f"Please ensure Jan.ai is running at {self.base_url}",
+            f"Please ensure your configured LLM backend is reachable at {self.base_url}",
             error_type=last_error_type,
         )
 
@@ -230,11 +264,11 @@ class JanClient:
             return content.strip()
         except (KeyError, IndexError) as e:
             logger.error(f"└── chat() ❌ Unexpected response format: {response}")
-            raise JanClientError(f"Unexpected response format: {e}")
+            raise LLMClientError(f"Unexpected response format: {e}")
 
     def test_connection(self) -> bool:
         """
-        Test the connection to Jan.ai server by calling GET /models.
+        Test connection to the configured LLM server by calling GET /models.
         Sends the configured api_key so the server does not reject with 401.
 
         Returns:
@@ -251,17 +285,17 @@ class JanClient:
                 timeout=5,
             )
             response.raise_for_status()
-            logger.info("Successfully connected to Jan.ai")
+            logger.info("Successfully connected to configured LLM backend")
             return True
         except requests.exceptions.HTTPError as e:
             status = e.response.status_code if e.response is not None else "N/A"
             logger.warning(
-                f"Could not connect to Jan.ai: {e} "
-                f"(HTTP {status} — check your JAN_API_KEY / api_key)"
+                f"Could not connect to configured LLM backend: {e} "
+                f"(HTTP {status} — check your provider API key / config)"
             )
             return False
         except Exception as e:
-            logger.warning(f"Could not connect to Jan.ai: {e}")
+            logger.warning(f"Could not connect to configured LLM backend: {e}")
             return False
 
 
@@ -284,9 +318,16 @@ def get_llm_config(
     """
     load_dotenv()
 
-    base_url = os.getenv("JAN_BASE_URL", "http://localhost:1337/v1")
-    api_key = os.getenv("JAN_API_KEY", "")
-    model_name = os.getenv("JAN_MODEL_NAME", "Meta-Llama-3_1-8B-Instruct_Q4_K_M")
+    provider = os.getenv("LLM_PROVIDER", LLMClient.DEFAULT_PROVIDER).strip().lower()
+
+    if provider == "groq":
+        base_url = os.getenv("GROQ_BASE_URL", LLMClient.DEFAULT_GROQ_BASE_URL)
+        api_key = os.getenv("GROQ_API_KEY", "")
+        model_name = os.getenv("GROQ_MODEL_NAME", LLMClient.DEFAULT_GROQ_MODEL)
+    else:
+        base_url = os.getenv("JAN_BASE_URL", LLMClient.DEFAULT_BASE_URL)
+        api_key = os.getenv("JAN_API_KEY", LLMClient.DEFAULT_API_KEY)
+        model_name = os.getenv("JAN_MODEL_NAME", LLMClient.DEFAULT_MODEL)
     default_temp = float(os.getenv("TEMPERATURE", "0.8"))
     default_max_tokens = int(os.getenv("MAX_TOKENS", "500"))
 
@@ -317,8 +358,19 @@ def validate_environment() -> tuple[bool, str]:
     """
     load_dotenv()
 
-    required_vars = ["JAN_BASE_URL"]
-    optional_vars = ["JAN_API_KEY", "JAN_MODEL_NAME", "TEMPERATURE", "MAX_TOKENS"]
+    provider = os.getenv("LLM_PROVIDER", LLMClient.DEFAULT_PROVIDER).strip().lower()
+    if provider not in LLMClient.SUPPORTED_PROVIDERS:
+        return (
+            False,
+            "Invalid LLM_PROVIDER. Supported values: jan, groq",
+        )
+
+    if provider == "groq":
+        required_vars = ["GROQ_BASE_URL", "GROQ_API_KEY"]
+        optional_vars = ["GROQ_MODEL_NAME", "TEMPERATURE", "MAX_TOKENS"]
+    else:
+        required_vars = ["JAN_BASE_URL"]
+        optional_vars = ["JAN_API_KEY", "JAN_MODEL_NAME", "TEMPERATURE", "MAX_TOKENS"]
 
     missing = []
     for var in required_vars:
@@ -338,4 +390,3 @@ def validate_environment() -> tuple[bool, str]:
         return True, f"Using defaults for: {', '.join(warnings)}"
 
     return True, "All environment variables configured"
-

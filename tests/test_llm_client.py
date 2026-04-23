@@ -1,17 +1,17 @@
 """
-Tests for utils/jan_client.py
+Tests for utils/llm_client.py
 
 Run with:
-    pytest tests/test_jan_client.py -v
+    pytest tests/test_llm_client.py -v
 
 You can override the model / API key used in integration-style tests by
 setting environment variables before running:
 
     JAN_TEST_API_KEY=test-key-override  JAN_TEST_MODEL=my-model  pytest -v
 
-Or pass them directly in code via the JanClient constructor:
+Or pass them directly in code via the LLMClient constructor:
 
-    client = JanClient(api_key="test-only-key", model_name="test-model")
+    client = LLMClient(api_key="test-only-key", model_name="test-model")
 
 NOTE: No real credentials are stored in this file.
       All values are either clearly-labelled test dummies or read from env vars.
@@ -24,7 +24,7 @@ from unittest.mock import patch, MagicMock
 # ── project root on path ────────────────────────────────────────────────────
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.jan_client import JanClient, JanClientError, get_llm_config, validate_environment
+from utils.llm_client import LLMClient, LLMClientError, get_llm_config, validate_environment
 
 # ============================================================================
 # Dummy values used ONLY in tests — not real credentials
@@ -35,7 +35,7 @@ DUMMY_BASE_URL = "http://localhost:1337/v1"
 
 # Configurable overrides — set these env vars to test against a real server
 TEST_API_KEY = os.getenv("JAN_TEST_API_KEY", DUMMY_API_KEY)
-TEST_MODEL = os.getenv("JAN_TEST_MODEL", JanClient.DEFAULT_MODEL)
+TEST_MODEL = os.getenv("JAN_TEST_MODEL", LLMClient.DEFAULT_MODEL)
 TEST_BASE_URL = os.getenv("JAN_TEST_BASE_URL", DUMMY_BASE_URL)
 
 
@@ -43,9 +43,9 @@ TEST_BASE_URL = os.getenv("JAN_TEST_BASE_URL", DUMMY_BASE_URL)
 # Helpers
 # ============================================================================
 
-def _make_client(**kwargs) -> JanClient:
+def _make_client(**kwargs) -> LLMClient:
     """
-    Create a JanClient with safe test overrides (no real credentials).
+    Create a LLMClient with safe test overrides (no real credentials).
     Any kwarg is forwarded; defaults use DUMMY_* constants above.
     """
     defaults = dict(
@@ -54,25 +54,25 @@ def _make_client(**kwargs) -> JanClient:
         model_name=TEST_MODEL,
     )
     defaults.update(kwargs)
-    with patch("utils.jan_client.load_dotenv"):
-        return JanClient(**defaults)
+    with patch("utils.llm_client.load_dotenv"):
+        return LLMClient(**defaults)
 
 
 # ============================================================================
 # Initialisation
 # ============================================================================
 
-class TestJanClientInit:
+class TestLLMClientInit:
     """Test constructor priority: kwarg > env-var > default constant."""
 
     def test_defaults_used_when_no_env_or_kwarg(self):
         """All class-level defaults are applied when nothing else is set."""
         with patch.dict(os.environ, {}, clear=True):
-            with patch("utils.jan_client.load_dotenv"):
-                client = JanClient()
-        assert client.base_url == JanClient.DEFAULT_BASE_URL
-        assert client.api_key == JanClient.DEFAULT_API_KEY
-        assert client.model_name == JanClient.DEFAULT_MODEL
+            with patch("utils.llm_client.load_dotenv"):
+                client = LLMClient()
+        assert client.base_url == LLMClient.DEFAULT_BASE_URL
+        assert client.api_key == LLMClient.DEFAULT_API_KEY
+        assert client.model_name == LLMClient.DEFAULT_MODEL
 
     def test_env_vars_override_defaults(self):
         """Environment variables take precedence over class defaults."""
@@ -82,8 +82,8 @@ class TestJanClientInit:
             "JAN_MODEL_NAME": "env-model",
         }
         with patch.dict(os.environ, env, clear=False):
-            with patch("utils.jan_client.load_dotenv"):
-                client = JanClient()
+            with patch("utils.llm_client.load_dotenv"):
+                client = LLMClient()
         assert client.base_url == "http://custom-host:9999/v1"
         assert client.api_key == "env-key"
         assert client.model_name == "env-model"
@@ -92,8 +92,8 @@ class TestJanClientInit:
         """Explicit constructor kwargs beat env vars and defaults."""
         env = {"JAN_API_KEY": "env-key", "JAN_MODEL_NAME": "env-model"}
         with patch.dict(os.environ, env, clear=False):
-            with patch("utils.jan_client.load_dotenv"):
-                client = JanClient(api_key="kwarg-key", model_name="kwarg-model")
+            with patch("utils.llm_client.load_dotenv"):
+                client = LLMClient(api_key="kwarg-key", model_name="kwarg-model")
         assert client.api_key == "kwarg-key"
         assert client.model_name == "kwarg-model"
 
@@ -108,18 +108,46 @@ class TestJanClientInit:
         assert client.model_name == "mistral-7b-instruct"
 
     def test_missing_base_url_raises(self):
-        """Passing an empty base_url should raise JanClientError."""
+        """Passing an empty base_url should raise LLMClientError."""
         with patch.dict(os.environ, {"JAN_BASE_URL": ""}, clear=False):
-            with patch("utils.jan_client.load_dotenv"):
-                with pytest.raises(JanClientError, match="JAN_BASE_URL"):
-                    JanClient(base_url="")
+            with patch("utils.llm_client.load_dotenv"):
+                with pytest.raises(LLMClientError, match="base URL"):
+                    LLMClient(base_url="")
+
+    def test_groq_provider_reads_groq_env_vars(self):
+        """LLM_PROVIDER=groq should load GROQ_* environment configuration."""
+        env = {
+            "LLM_PROVIDER": "groq",
+            "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
+            "GROQ_API_KEY": "groq-test-key",
+            "GROQ_MODEL_NAME": "llama-3.3-70b-versatile",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch("utils.llm_client.load_dotenv"):
+                client = LLMClient()
+        assert client.provider == "groq"
+        assert client.base_url == "https://api.groq.com/openai/v1"
+        assert client.api_key == "groq-test-key"
+        assert client.model_name == "llama-3.3-70b-versatile"
+
+    def test_groq_provider_requires_api_key(self):
+        """Groq provider should require GROQ_API_KEY."""
+        env = {
+            "LLM_PROVIDER": "groq",
+            "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
+            "GROQ_API_KEY": "",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch("utils.llm_client.load_dotenv"):
+                with pytest.raises(LLMClientError, match="GROQ_API_KEY"):
+                    LLMClient()
 
 
 # ============================================================================
 # test_connection()
 # ============================================================================
 
-class TestJanClientTestConnection:
+class TestLLMClientTestConnection:
     """Unit tests for test_connection() — no real network calls."""
 
     @patch("requests.get")
@@ -184,7 +212,7 @@ class TestJanClientTestConnection:
 # chat()
 # ============================================================================
 
-class TestJanClientChat:
+class TestLLMClientChat:
     """Unit tests for the chat() convenience method."""
 
     @patch("requests.post")
@@ -236,19 +264,19 @@ class TestJanClientChat:
 
     @patch("requests.post")
     def test_chat_raises_on_bad_response_format(self, mock_post):
-        """chat() should raise JanClientError when response has no choices."""
+        """chat() should raise LLMClientError when response has no choices."""
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = {"unexpected": "format"}
         mock_post.return_value = mock_resp
 
         client = _make_client()
-        with pytest.raises(JanClientError, match="Unexpected response format"):
+        with pytest.raises(LLMClientError, match="Unexpected response format"):
             client.chat([{"role": "user", "content": "Hi"}])
 
     @patch("requests.post")
     def test_chat_raises_on_4xx(self, mock_post):
-        """chat() should raise JanClientError on a 4xx HTTP error (no retry)."""
+        """chat() should raise LLMClientError on a 4xx HTTP error (no retry)."""
         import requests as req_lib
 
         mock_resp = MagicMock()
@@ -258,7 +286,7 @@ class TestJanClientChat:
         mock_post.return_value = mock_resp
 
         client = _make_client()
-        with pytest.raises(JanClientError):
+        with pytest.raises(LLMClientError):
             client.chat([{"role": "user", "content": "Hi"}])
 
 
@@ -276,21 +304,36 @@ class TestGetLlmConfig:
             "JAN_MODEL_NAME": "llama-3.1-8b-instruct",
         }
         with patch.dict(os.environ, env, clear=False):
-            with patch("utils.jan_client.load_dotenv"):
+            with patch("utils.llm_client.load_dotenv"):
                 config = get_llm_config()
         assert "config_list" in config
         assert config["config_list"][0]["model"] == "llama-3.1-8b-instruct"
         assert config["config_list"][0]["base_url"] == "http://localhost:1337/v1"
 
     def test_temperature_override(self):
-        with patch("utils.jan_client.load_dotenv"):
+        with patch("utils.llm_client.load_dotenv"):
             config = get_llm_config(temperature=0.3)
         assert config["temperature"] == 0.3
 
     def test_max_tokens_override(self):
-        with patch("utils.jan_client.load_dotenv"):
+        with patch("utils.llm_client.load_dotenv"):
             config = get_llm_config(max_tokens=1024)
         assert config["max_tokens"] == 1024
+
+    def test_uses_groq_config_when_provider_is_groq(self):
+        env = {
+            "LLM_PROVIDER": "groq",
+            "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
+            "GROQ_API_KEY": "groq-key",
+            "GROQ_MODEL_NAME": "llama-3.1-8b-instant",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch("utils.llm_client.load_dotenv"):
+                config = get_llm_config()
+        cfg = config["config_list"][0]
+        assert cfg["base_url"] == "https://api.groq.com/openai/v1"
+        assert cfg["api_key"] == "groq-key"
+        assert cfg["model"] == "llama-3.1-8b-instant"
 
 
 # ============================================================================
@@ -303,7 +346,7 @@ class TestValidateEnvironment:
     def test_valid_when_base_url_set(self):
         env = {"JAN_BASE_URL": "http://localhost:1337/v1"}
         with patch.dict(os.environ, env, clear=False):
-            with patch("utils.jan_client.load_dotenv"):
+            with patch("utils.llm_client.load_dotenv"):
                 is_valid, msg = validate_environment()
         assert is_valid is True
 
@@ -312,21 +355,33 @@ class TestValidateEnvironment:
         env = os.environ.copy()
         env.pop("JAN_BASE_URL", None)
         with patch.dict(os.environ, env, clear=True):
-            with patch("utils.jan_client.load_dotenv"):
+            with patch("utils.llm_client.load_dotenv"):
                 is_valid, msg = validate_environment()
         assert is_valid is False
         assert "JAN_BASE_URL" in msg
+
+    def test_groq_invalid_when_api_key_missing(self):
+        env = {
+            "LLM_PROVIDER": "groq",
+            "GROQ_BASE_URL": "https://api.groq.com/openai/v1",
+            "GROQ_API_KEY": "",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            with patch("utils.llm_client.load_dotenv"):
+                is_valid, msg = validate_environment()
+        assert is_valid is False
+        assert "GROQ_API_KEY" in msg
 
 
 # ============================================================================
 # Standalone runner (no pytest required)
 # ============================================================================
 
-def run_jan_client_tests():
+def run_llm_client_tests():
     """
     Quick smoke-test runner that can be called directly:
 
-        python tests/test_jan_client.py
+        python tests/test_llm_client.py
     """
     from unittest.mock import patch, MagicMock
     import requests as req_lib
@@ -384,7 +439,7 @@ def run_jan_client_tests():
     # --- validate_environment ---
     print("\n▶ validate_environment — with JAN_BASE_URL set...")
     with patch.dict(os.environ, {"JAN_BASE_URL": "http://localhost:1337/v1"}):
-        with patch("utils.jan_client.load_dotenv"):
+        with patch("utils.llm_client.load_dotenv"):
             is_valid, msg = validate_environment()
     assert is_valid is True
     print("  ✅ Valid environment recognised")
@@ -396,5 +451,5 @@ def run_jan_client_tests():
 
 
 if __name__ == "__main__":
-    success = run_jan_client_tests()
+    success = run_llm_client_tests()
     sys.exit(0 if success else 1)

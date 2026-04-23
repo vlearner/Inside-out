@@ -21,14 +21,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger("INSIDE-OUT")
 
-# Import Jan client for LLM integration
+# Import shared LLM client for backend integration
 try:
-    from utils.jan_client import JanClient, JanClientError, LLMError
-    JAN_AVAILABLE = True
-    logger.info("✅ Jan AI client module loaded successfully")
+    from utils.llm_client import LLMClient, LLMClientError, LLMError
+    LLM_CLIENT_AVAILABLE = True
+    logger.info("✅ LLM backend client module loaded successfully")
 except ImportError as e:
-    JAN_AVAILABLE = False
-    logger.warning(f"❌ Jan client not available: {e} - using static responses")
+    LLM_CLIENT_AVAILABLE = False
+    logger.warning(f"❌ LLM client not available: {e} - using static responses")
 
 # Import weather tool for weather lookups
 try:
@@ -87,8 +87,8 @@ ONLY respond with the JSON object, nothing else."""
 class PersonalityAgent:
     """Base class for personality agents"""
     
-    # Shared Jan client instance
-    _jan_client = None
+    # Shared LLM client instance
+    _llm_client = None
     _connection_tested = False
 
     # Maps LLMError.error_type → human-readable degraded_reason for the response payload
@@ -100,40 +100,40 @@ class PersonalityAgent:
     }
     
     @classmethod
-    def get_jan_client(cls):
-        """Get or create shared Jan client (singleton)"""
-        if cls._jan_client is not None:
-            return cls._jan_client
+    def get_llm_client(cls):
+        """Get or create shared LLM client (singleton)."""
+        if cls._llm_client is not None:
+            return cls._llm_client
 
-        if not JAN_AVAILABLE:
-            logger.info("📝 Jan AI module not available — will use LOCAL static responses")
+        if not LLM_CLIENT_AVAILABLE:
+            logger.info("📝 LLM backend module not available — will use LOCAL static responses")
             return None
 
         try:
-            logger.info("🔌 Initializing Jan AI client...")
-            cls._jan_client = JanClient()
+            logger.info("🔌 Initializing LLM backend client...")
+            cls._llm_client = LLMClient()
             logger.info(
-                f"🔌 Jan AI client created — model: {cls._jan_client.model_name}, "
-                f"url: {cls._jan_client.base_url}"
+                f"🔌 LLM backend client created — model: {cls._llm_client.model_name}, "
+                f"url: {cls._llm_client.base_url}"
             )
 
             # One-time connection test (informational only — do NOT null the client)
             if not cls._connection_tested:
                 cls._connection_tested = True
-                logger.info(f"🔗 Testing connection to Jan AI at {cls._jan_client.base_url}...")
-                if cls._jan_client.test_connection():
-                    logger.info(f"✅ Connected to Jan AI! Model: {cls._jan_client.model_name}")
+                logger.info(f"🔗 Testing connection to LLM backend at {cls._llm_client.base_url}...")
+                if cls._llm_client.test_connection():
+                    logger.info(f"✅ Connected to LLM backend! Model: {cls._llm_client.model_name}")
                 else:
                     logger.warning(
-                        "⚠️ Jan AI connection test failed — server may not be running. "
+                        "⚠️ LLM backend connection test failed — server may not be running. "
                         "Chat requests will still be attempted (they may fail)."
                     )
 
         except Exception as e:
-            logger.error(f"❌ Failed to initialize Jan client: {e}")
-            cls._jan_client = None
+            logger.error(f"❌ Failed to initialize LLM client: {e}")
+            cls._llm_client = None
 
-        return cls._jan_client
+        return cls._llm_client
     
     def __init__(self, personality_type: str, enabled: bool = True):
         self.personality_type = personality_type
@@ -149,15 +149,15 @@ class PersonalityAgent:
     
     def get_response(self, question: str, llm_config: Optional[Dict] = None, corrective_hint: str = "", history: Optional[list] = None) -> str:
         """
-        Generate a response based on this personality using Jan AI.
-        Falls back to static response if Jan AI is unavailable.
+        Generate a response based on this personality using LLM backend.
+        Falls back to static response if LLM backend is unavailable.
         Includes weather data when user asks about weather.
 
         Flow:
           1. Strip @mentions from the question
           2. Detect weather query → fetch weather data via weather_tool
           3. Build prompt with weather context (if any)
-          4. Send prompt to Jan AI → return LLM response
+          4. Send prompt to LLM backend → return LLM response
           5. On failure → return LOCAL static fallback
 
         Args:
@@ -224,15 +224,15 @@ class PersonalityAgent:
         logger.info(f"── {tag} Step 3 — Prompt built ({len(user_message)} chars, weather={'YES' if weather_context else 'NO'})")
         logger.debug(f"── {tag} Full prompt:\n{user_message}")
 
-        # ── Step 4: Send to Jan AI ───────────────────────────────────────────
-        jan_client = self.get_jan_client()
-        if jan_client:
+        # ── Step 4: Send to LLM backend ───────────────────────────────────────────
+        llm_client = self.get_llm_client()
+        if llm_client:
             try:
                 logger.info(
-                    f"🤖 {tag} Step 4 — Sending request to Jan AI "
-                    f"(model={jan_client.model_name}, url={jan_client.base_url})..."
+                    f"🤖 {tag} Step 4 — Sending request to LLM backend "
+                    f"(model={llm_client.model_name}, url={llm_client.base_url})..."
                 )
-                llm_response = jan_client.chat(messages, max_tokens=weather_max_tokens)
+                llm_response = llm_client.chat(messages, max_tokens=weather_max_tokens)
                 logger.info(f"✅ {tag} Step 4 — LLM response received: \"{llm_response[:120]}...\"")
 
                 response = f"{self.emoji} **{self.name}**: {llm_response}"
@@ -252,14 +252,14 @@ class PersonalityAgent:
                 self._degraded = True
                 self._degraded_reason = "LLM unavailable"
                 logger.warning(
-                    f"⚠️ {tag} Step 4 — Jan AI chat FAILED: {type(e).__name__}: {e}"
+                    f"⚠️ {tag} Step 4 — LLM backend chat FAILED: {type(e).__name__}: {e}"
                 )
                 logger.warning(
                     f"📝 {tag} Step 5 — Falling back to LOCAL static response"
                 )
         else:
             logger.warning(
-                f"📝 {tag} Step 4 — No Jan AI client available — "
+                f"📝 {tag} Step 4 — No LLM backend client available — "
                 f"using LOCAL static response"
             )
 
@@ -309,9 +309,9 @@ class DecisionAgent:
         self.name = "Decision"
         self.system_prompt = DECISION_AGENT_PROMPT
     
-    def get_jan_client(self):
-        """Get shared Jan client"""
-        return PersonalityAgent.get_jan_client()
+    def get_llm_client(self):
+        """Get shared LLM client."""
+        return PersonalityAgent.get_llm_client()
     
     def analyze_message(self, message: str) -> Dict[str, bool]:
         """
@@ -320,16 +320,16 @@ class DecisionAgent:
         """
         logger.info(f"🧠 [Decision Agent] Analyzing: '{message[:50]}...'")
         
-        jan_client = self.get_jan_client()
+        llm_client = self.get_llm_client()
         
-        if jan_client:
+        if llm_client:
             try:
                 messages = [
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": f"User message: \"{message}\"\n\nWhich emotions should respond? Return ONLY JSON."}
                 ]
                 
-                response = jan_client.chat(messages, max_tokens=100)
+                response = llm_client.chat(messages, max_tokens=100)
                 logger.info(f"🧠 [Decision Agent] Raw response: {response}")
                 
                 # Parse JSON response
@@ -512,14 +512,14 @@ class MonitorAgent:
             return False, "🚦 **Monitor**: Give me something fun to work with! Try a fun question! 🦸"
 
         # ── Stage 2: Semantic LLM check ──────────────────────────────────────
-        jan_client = PersonalityAgent.get_jan_client()
-        if jan_client:
+        llm_client = PersonalityAgent.get_llm_client()
+        if llm_client:
             try:
                 messages = [
                     {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": question},
                 ]
-                response = jan_client.chat(messages, max_tokens=50)
+                response = llm_client.chat(messages, max_tokens=50)
                 logger.info(f"🚦 [Monitor] Stage 2 — LLM response: '{response}'")
                 if "REJECT" in response.upper():
                     return False, "🚦 **Monitor**: This seems too serious for our fun zone! Try something silly instead! 😄"
@@ -556,9 +556,9 @@ class SynthesisAgent:
     # LLM access (shared singleton)
     # ------------------------------------------------------------------
 
-    def get_jan_client(self):
-        """Get shared Jan client."""
-        return PersonalityAgent.get_jan_client()
+    def get_llm_client(self):
+        """Get shared LLM client."""
+        return PersonalityAgent.get_llm_client()
 
     # ------------------------------------------------------------------
     # Quality reflection helpers
@@ -628,8 +628,8 @@ class SynthesisAgent:
 
         Uses the LLM when available; falls back to a deterministic string.
         """
-        jan_client = self.get_jan_client()
-        if jan_client:
+        llm_client = self.get_llm_client()
+        if llm_client:
             try:
                 summary_input = "\n".join(
                     f"- {r['agent']}: {self._extract_response_text(r['response'])}"
@@ -646,7 +646,7 @@ class SynthesisAgent:
                         ),
                     },
                 ]
-                headline = jan_client.chat(messages, max_tokens=60)
+                headline = llm_client.chat(messages, max_tokens=60)
                 if headline and headline.strip():
                     logger.info(f"🔮 [Synthesis] LLM headline: \"{headline.strip()}\"")
                     return headline.strip()

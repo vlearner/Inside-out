@@ -238,7 +238,7 @@ class TestGenerateHeadline:
         synth = SynthesisAgent()
         entries = [_joy_entry(), _anger_entry()]
 
-        with patch.object(PersonalityAgent, "get_jan_client", return_value=None):
+        with patch.object(PersonalityAgent, "get_llm_client", return_value=None):
             headline = synth.generate_headline("test question", entries)
 
         assert "Joy" in headline
@@ -254,7 +254,7 @@ class TestGenerateHeadline:
                 "color": "purple", "response": "😰 **Fear**: Oh no! 😰",
             },
         ]
-        with patch.object(PersonalityAgent, "get_jan_client", return_value=None):
+        with patch.object(PersonalityAgent, "get_llm_client", return_value=None):
             headline = synth.generate_headline("test", entries)
 
         assert "Joy" in headline
@@ -267,7 +267,7 @@ class TestGenerateHeadline:
         mock_client = MagicMock()
         mock_client.chat.return_value = "Joy is thrilled but Anger wants a word!"
 
-        with patch.object(PersonalityAgent, "get_jan_client", return_value=mock_client):
+        with patch.object(PersonalityAgent, "get_llm_client", return_value=mock_client):
             headline = synth.generate_headline("test", entries)
 
         assert headline == "Joy is thrilled but Anger wants a word!"
@@ -279,7 +279,7 @@ class TestGenerateHeadline:
         mock_client = MagicMock()
         mock_client.chat.side_effect = RuntimeError("LLM down")
 
-        with patch.object(PersonalityAgent, "get_jan_client", return_value=mock_client):
+        with patch.object(PersonalityAgent, "get_llm_client", return_value=mock_client):
             headline = synth.generate_headline("test", entries)
 
         assert "Joy" in headline
