@@ -38,8 +38,7 @@ def _make_llm_client(**kwargs) -> LLMClient:
         model_name="test-model",
     )
     defaults.update(kwargs)
-    with patch("utils.llm_client.load_dotenv"):
-        return LLMClient(**defaults)
+    return LLMClient(**defaults)
 
 
 def _make_system() -> MultiAgentSystem:

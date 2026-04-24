@@ -105,50 +105,41 @@ class TestWeatherClient:
     def test_client_initialization_without_api_key(self):
         """Test that client initializes with warning when no API key"""
         with patch.dict(os.environ, {"WEATHER_API_KEY": ""}, clear=False):
-            with patch('utils.weather_client.load_dotenv'):
-                client = WeatherClient()
-                assert client.api_key == ""
+            client = WeatherClient()
+            assert client.api_key == ""
 
     def test_client_initialization_with_api_key(self):
         """Test that client initializes correctly with API key"""
         with patch.dict(os.environ, {"WEATHER_API_KEY": "test_key"}, clear=False):
-            with patch('utils.weather_client.load_dotenv'):
-                client = WeatherClient()
-                assert client.api_key == "test_key"
+            client = WeatherClient()
+            assert client.api_key == "test_key"
 
     def test_sanitize_location_valid(self):
         """Test location sanitization with valid inputs"""
         with patch.dict(os.environ, {"WEATHER_API_KEY": "test"}, clear=False):
-            with patch('utils.weather_client.load_dotenv'):
-                client = WeatherClient()
-                
-                assert client._sanitize_location("New York") == "New York"
-                assert client._sanitize_location("London, UK") == "London, UK"
-                assert client._sanitize_location("  Paris  ") == "Paris"
-                assert client._sanitize_location("90210") == "90210"
+            client = WeatherClient()
+            assert client._sanitize_location("New York") == "New York"
+            assert client._sanitize_location("London, UK") == "London, UK"
+            assert client._sanitize_location("  Paris  ") == "Paris"
+            assert client._sanitize_location("90210") == "90210"
 
     def test_sanitize_location_removes_dangerous_chars(self):
         """Test that dangerous characters are removed"""
         with patch.dict(os.environ, {"WEATHER_API_KEY": "test"}, clear=False):
-            with patch('utils.weather_client.load_dotenv'):
-                client = WeatherClient()
-                
-                # Script injection attempt should be sanitized
-                result = client._sanitize_location("<script>alert('xss')</script>")
-                assert "<" not in result
-                assert ">" not in result
+            client = WeatherClient()
+            # Script injection attempt should be sanitized
+            result = client._sanitize_location("<script>alert('xss')</script>")
+            assert "<" not in result
+            assert ">" not in result
 
     def test_sanitize_location_empty_raises_error(self):
         """Test that empty location raises error"""
         with patch.dict(os.environ, {"WEATHER_API_KEY": "test"}, clear=False):
-            with patch('utils.weather_client.load_dotenv'):
-                client = WeatherClient()
-                
-                with pytest.raises(WeatherClientError):
-                    client._sanitize_location("")
-                
-                with pytest.raises(WeatherClientError):
-                    client._sanitize_location("   ")
+            client = WeatherClient()
+            with pytest.raises(WeatherClientError):
+                client._sanitize_location("")
+            with pytest.raises(WeatherClientError):
+                client._sanitize_location("   ")
 
     @patch('requests.get')
     def test_get_current_weather_success(self, mock_get):
@@ -159,25 +150,20 @@ class TestWeatherClient:
         mock_get.return_value = mock_response
 
         with patch.dict(os.environ, {"WEATHER_API_KEY": "test_key"}, clear=False):
-            with patch('utils.weather_client.load_dotenv'):
-                client = WeatherClient()
-                result = client.get_current_weather("New York")
-                
-                assert result == MOCK_CURRENT_WEATHER
-                assert "location" in result
-                assert "current" in result
+            client = WeatherClient()
+            result = client.get_current_weather("New York")
+            assert result == MOCK_CURRENT_WEATHER
+            assert "location" in result
+            assert "current" in result
 
     @patch('requests.get')
     def test_get_current_weather_no_api_key(self, mock_get):
         """Test that request fails without API key"""
         with patch.dict(os.environ, {"WEATHER_API_KEY": ""}, clear=False):
-            with patch('utils.weather_client.load_dotenv'):
-                client = WeatherClient()
-                
-                with pytest.raises(WeatherClientError) as exc_info:
-                    client.get_current_weather("New York")
-                
-                assert "WEATHER_API_KEY" in str(exc_info.value)
+            client = WeatherClient()
+            with pytest.raises(WeatherClientError) as exc_info:
+                client.get_current_weather("New York")
+            assert "api_key" in str(exc_info.value)
 
     @patch('requests.get')
     def test_get_forecast_success(self, mock_get):
@@ -188,24 +174,19 @@ class TestWeatherClient:
         mock_get.return_value = mock_response
 
         with patch.dict(os.environ, {"WEATHER_API_KEY": "test_key"}, clear=False):
-            with patch('utils.weather_client.load_dotenv'):
-                client = WeatherClient()
-                result = client.get_forecast("London", days=3)
-                
-                assert "forecast" in result
-                assert len(result["forecast"]["forecastday"]) == 3
+            client = WeatherClient()
+            result = client.get_forecast("London", days=3)
+            assert "forecast" in result
+            assert len(result["forecast"]["forecastday"]) == 3
 
     def test_get_forecast_invalid_days(self):
         """Test that invalid days parameter raises error"""
         with patch.dict(os.environ, {"WEATHER_API_KEY": "test_key"}, clear=False):
-            with patch('utils.weather_client.load_dotenv'):
-                client = WeatherClient()
-                
-                with pytest.raises(WeatherClientError):
-                    client.get_forecast("London", days=0)
-                
-                with pytest.raises(WeatherClientError):
-                    client.get_forecast("London", days=15)
+            client = WeatherClient()
+            with pytest.raises(WeatherClientError):
+                client.get_forecast("London", days=0)
+            with pytest.raises(WeatherClientError):
+                client.get_forecast("London", days=15)
 
 
 # ============================================================================
@@ -218,7 +199,7 @@ class TestWeatherTool:
     def test_format_weather_response(self):
         """Test weather response formatting"""
         formatted = format_weather_response(MOCK_CURRENT_WEATHER)
-        
+
         assert "New York" in formatted
         assert "41" in formatted  # temp_f
         assert "Partly cloudy" in formatted
@@ -227,7 +208,7 @@ class TestWeatherTool:
     def test_format_forecast_response(self):
         """Test forecast response formatting"""
         formatted = format_forecast_response(MOCK_FORECAST, days=3)
-        
+
         assert "London" in formatted
         assert "2024-01-15" in formatted
         assert "Cloudy" in formatted
@@ -266,7 +247,7 @@ class TestWeatherTool:
         mock_get_client.return_value = mock_client
 
         result = get_weather("New York")
-        
+
         assert "New York" in result
         assert "41" in result  # temp_f
 
@@ -278,7 +259,7 @@ class TestWeatherTool:
         mock_get_client.return_value = mock_client
 
         result = get_weather("InvalidLocation")
-        
+
         assert "Could not get weather" in result
 
     @patch('tools.weather_tool._get_client')
@@ -289,7 +270,7 @@ class TestWeatherTool:
         mock_get_client.return_value = mock_client
 
         result = get_forecast("London", days=3)
-        
+
         assert "London" in result
         assert "forecast" in result.lower()
 
@@ -304,18 +285,16 @@ class TestWeatherConfig:
     def test_validate_config_with_key(self):
         """Test configuration validation with API key set"""
         with patch.dict(os.environ, {"WEATHER_API_KEY": "test_key"}, clear=False):
-            with patch('utils.weather_client.load_dotenv'):
-                is_valid, message = validate_weather_config()
-                assert is_valid is True
-                assert "configured" in message.lower()
+            is_valid, message = validate_weather_config()
+            assert is_valid is True
+            assert "configured" in message.lower()
 
     def test_validate_config_without_key(self):
         """Test configuration validation without API key"""
         with patch.dict(os.environ, {"WEATHER_API_KEY": ""}, clear=False):
-            with patch('utils.weather_client.load_dotenv'):
-                is_valid, message = validate_weather_config()
-                assert is_valid is False
-                assert "not set" in message.lower()
+            is_valid, message = validate_weather_config()
+            assert is_valid is False
+            assert "not set" in message.lower()
 
 
 # ============================================================================
