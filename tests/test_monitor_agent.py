@@ -198,3 +198,66 @@ class TestMonitorStage2LLM:
             except Exception as exc:
                 pytest.fail(f"check_question() raised an unexpected exception: {exc}")
         assert result[0] is True
+
+
+# ============================================================================
+# Stage 2 — LLM uncertain (HITL clarification gate)
+# ============================================================================
+
+class TestMonitorStage2Uncertain:
+    """Stage 2: LLM returns UNCERTAIN → three-state verdict."""
+
+    @staticmethod
+    def _mock_client(response_text: str):
+        client = MagicMock()
+        client.chat.return_value = response_text
+        return client
+
+    def test_llm_uncertain_returns_none(self):
+        """LLM returns UNCERTAIN → is_approved is None (not True/False)."""
+        monitor = MonitorAgent()
+        mock_client = self._mock_client("UNCERTAIN")
+        with patch.object(PersonalityAgent, "get_jan_client", return_value=mock_client):
+            approved, msg = monitor.check_question("I feel like everything is changing so fast")
+        assert approved is None
+
+    def test_llm_uncertain_case_insensitive(self):
+        """'uncertain' in any case should trigger clarification."""
+        monitor = MonitorAgent()
+        mock_client = self._mock_client("uncertain")
+        with patch.object(PersonalityAgent, "get_jan_client", return_value=mock_client):
+            approved, _ = monitor.check_question("Things have been really rough lately")
+        assert approved is None
+
+    def test_uncertain_returns_clarification_prompt(self):
+        """Uncertain verdict must include a fun clarification prompt."""
+        monitor = MonitorAgent()
+        mock_client = self._mock_client("UNCERTAIN")
+        with patch.object(PersonalityAgent, "get_jan_client", return_value=mock_client):
+            approved, msg = monitor.check_question("I feel like everything is changing so fast")
+        assert approved is None
+        assert "fun zone" in msg.lower()
+
+    def test_uncertain_prompt_uses_class_constant(self):
+        """The clarification message should match MonitorAgent.CLARIFICATION_PROMPT."""
+        monitor = MonitorAgent()
+        mock_client = self._mock_client("UNCERTAIN")
+        with patch.object(PersonalityAgent, "get_jan_client", return_value=mock_client):
+            _, msg = monitor.check_question("Everything feels so overwhelming right now")
+        assert msg == MonitorAgent.CLARIFICATION_PROMPT
+
+    def test_reject_takes_priority_over_uncertain(self):
+        """If LLM says 'REJECT', we reject even if 'UNCERTAIN' is also present."""
+        monitor = MonitorAgent()
+        mock_client = self._mock_client("REJECT")
+        with patch.object(PersonalityAgent, "get_jan_client", return_value=mock_client):
+            approved, _ = monitor.check_question("Something ambiguous")
+        assert approved is False
+
+    def test_keyword_rejection_bypasses_uncertain(self):
+        """Stage 1 keyword match still hard-rejects — no UNCERTAIN path."""
+        monitor = MonitorAgent()
+        with patch.object(PersonalityAgent, "get_jan_client") as mock_get_client:
+            approved, _ = monitor.check_question("I feel depressed today")
+        mock_get_client.assert_not_called()
+        assert approved is False

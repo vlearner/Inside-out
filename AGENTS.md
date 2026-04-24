@@ -35,13 +35,14 @@ User Message
      │
      ▼
 ┌─────────────────────┐
-│    Monitor Agent    │  ← Gate-keeper: two-stage check
+│    Monitor Agent    │  ← Gate-keeper: two-stage check, three-state verdict
 │                     │     Stage 1: keyword blocklist + length check (fast, no LLM)
 │                     │     Stage 2: semantic LLM check via MONITOR_PROMPT (fail-open)
 └──────────┬──────────┘
-           │ Approved?
-           │  No  ──► Rejection message returned to user
-           │  Yes
+           │ Verdict?
+           │  Rejected   ──► Rejection message returned to user
+           │  Uncertain  ──► Clarification prompt returned (HITL gate)
+           │  Approved
            ▼
 ┌─────────────────────┐
 │  ConversationMemory │  ← get_context() → history (prior turns)
@@ -115,12 +116,43 @@ User Message
 
 The Monitor Agent is the **gate-keeper** that sits at the very front of the pipeline. It inspects every incoming user message and rejects anything that is too serious, inappropriate, or too short for the fun Inside Out chat zone.
 
-`check_question()` runs a **two-stage check**:
+`check_question()` runs a **two-stage check** and returns a **three-state verdict**:
+
+| Verdict | `is_approved` value | Meaning |
+|---|---|---|
+| **Approved** | `True` | Message is fun — route to personality agents |
+| **Rejected** | `False` | Message is clearly serious — hard block |
+| **Uncertain** | `None` | Message is ambiguous — ask the user to clarify (HITL) |
 
 | Stage | Description | LLM call? |
 |---|---|---|
-| **Stage 1 — Fast pre-check** | Keyword blocklist + length check. Returns immediately on match. | ❌ No |
-| **Stage 2 — Semantic LLM check** | If Stage 1 passes, sends the message to Jan AI with `MONITOR_PROMPT`. Blocks if the response contains `"REJECT"` (case-insensitive). **Fails-open** — a broken or unavailable LLM never blocks the chat. | ✅ Yes (when available) |
+| **Stage 1 — Fast pre-check** | Keyword blocklist + length check. Returns immediately on match (always `rejected`). | ❌ No |
+| **Stage 2 — Semantic LLM check** | If Stage 1 passes, sends the message to Jan AI with `MONITOR_PROMPT`. The LLM responds with `ALLOW`, `REJECT`, or `UNCERTAIN`. **Fails-open** — a broken or unavailable LLM never blocks the chat. | ✅ Yes (when available) |
+
+### Human-in-the-Loop Clarification Gate
+
+When the LLM returns `UNCERTAIN`, the monitor does **not** guess. Instead it returns `is_approved=None` with a playful clarification prompt in the Inside Out voice:
+
+> 🤔 Hmm, this might be getting a little serious — are you asking for fun, or do you need real help? We're a fun zone here! Try rephrasing with a silly spin! 🎭
+
+This prompt is stored as `MonitorAgent.CLARIFICATION_PROMPT` and can be customised.
+
+`MultiAgentSystem.get_responses()` short-circuits on `None` and returns:
+
+```python
+{
+    "approved": False,
+    "status": "clarification_needed",
+    "monitor_message": "🤔 Hmm, this might be ...",
+    "clarification_prompt": "🤔 Hmm, this might be ...",
+    "responses": [],
+    "decisions": {},
+    "degraded": False,
+    "degraded_reason": "",
+}
+```
+
+The UI renders this as an informational bubble (blue `st.info`) rather than a warning.
 
 ### Stage 1: Keyword Blocklist
 
@@ -161,6 +193,10 @@ monitor.check_question("hi")
 monitor.check_question("What is the optimal strategy for a hostile corporate takeover?")
 # → (False, "🚦 **Monitor**: This seems too serious for our fun zone! Try something silly instead! 😄")
 
+# 🤔 Uncertain — Stage 1 passes, LLM returns UNCERTAIN (ambiguous message)
+monitor.check_question("I feel like everything is changing so fast")
+# → (None, "🤔 Hmm, this might be getting a little serious — ...")
+
 # ✅ Approved — Stage 1 passes, LLM unavailable → fail-open
 monitor.check_question("What is your favourite colour?")  # (when Jan AI is down)
 # → (True, "✅ Approved!")
@@ -180,12 +216,17 @@ ALLOW questions that are:
 - Weather, food, travel, relationships, school, work — these are all fair game
 - Anything an emotion like Joy, Fear, Sadness, Anger, or Disgust would hilariously react to
 
+Reply UNCERTAIN when:
+- The message is ambiguous — it COULD be fun but also COULD be serious
+- It contains a word that sounds serious but is used casually (e.g. "I'm sick of homework", "this kills me")
+- You genuinely cannot tell if the user wants fun banter or real help
+
 A worried question about cold weather in Minneapolis is PERFECT for this app — Fear alone would have a field day!
 
-Reply with only: ALLOW or REJECT
+Reply with only: ALLOW, REJECT, or UNCERTAIN
 ```
 
-The LLM is called with `max_tokens=50` (only `APPROVE` / `REJECT` expected). On any LLM error or unavailability the check **fails-open** — a broken LLM never blocks the chat.
+The LLM is called with `max_tokens=50` (only `ALLOW` / `REJECT` / `UNCERTAIN` expected). On any LLM error or unavailability the check **fails-open** — a broken LLM never blocks the chat.
 
 ---
 
@@ -651,7 +692,8 @@ result = system.get_responses(question, mentioned=["joy"], llm_config=None)
 
 ```python
 {
-    "approved": True,          # False if Monitor rejected
+    "approved": True,          # False if Monitor rejected or uncertain
+    "status": "approved",      # "approved" | "rejected" | "clarification_needed"
     "monitor_message": "✅ Approved!",
     "responses": [
         {
@@ -678,6 +720,20 @@ result = system.get_responses(question, mentioned=["joy"], llm_config=None)
 }
 ```
 
+**`status` field values:**
+
+| Status | `approved` | When |
+|---|---|---|
+| `"approved"` | `true` | Message passed the monitor — personality agents respond |
+| `"rejected"` | `false` | Message clearly violates rules — hard block |
+| `"clarification_needed"` | `false` | Message is ambiguous — HITL clarification prompt returned |
+
+When `status` is `"clarification_needed"`, the payload also includes:
+
+```python
+"clarification_prompt": "🤔 Hmm, this might be getting a little serious — ..."
+```
+
 **`degraded` flag behaviour:**
 
 | Scenario | `degraded` | `degraded_reason` |
@@ -688,6 +744,7 @@ result = system.get_responses(question, mentioned=["joy"], llm_config=None)
 | Jan AI 5xx crash | `true` | `"LLM server error"` |
 | Bad request / wrong API key (4xx) | `true` | `"LLM request error"` |
 | Monitor rejection (not applicable) | `false` | `""` |
+| Monitor uncertain / clarification (not applicable) | `false` | `""` |
 
 The UI uses `degraded: true` to show a small orange **"● offline mode"** indicator right-aligned above the chat input — a subtle, non-intrusive signal that responses are static fallbacks. This indicator:
 - Appears automatically when the LLM goes down mid-session (detected from `degraded: true` in the response)

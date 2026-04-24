@@ -107,9 +107,14 @@ ALLOW questions that are:
 - Weather, food, travel, relationships, school, work — these are all fair game
 - Anything an emotion like Joy, Fear, Sadness, Anger, or Disgust would hilariously react to
 
+Reply UNCERTAIN when:
+- The message is ambiguous — it COULD be fun but also COULD be serious
+- It contains a word that sounds serious but is used casually (e.g. "I'm sick of homework", "this kills me")
+- You genuinely cannot tell if the user wants fun banter or real help
+
 A worried question about cold weather in Minneapolis is PERFECT for this app — Fear alone would have a field day!
 
-Reply with only: ALLOW or REJECT"""
+Reply with only: ALLOW, REJECT, or UNCERTAIN"""
 
 SYNTHESIS_AGENT_PROMPT = """You are the Synthesis Agent for an Inside Out personality chat.
 
