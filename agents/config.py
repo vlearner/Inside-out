@@ -6,7 +6,7 @@ import logging
 from typing import Dict, List, Optional, Any
 from autogen import GroupChat, GroupChatManager, ConversableAgent
 
-from utils.jan_client import get_llm_config
+from utils.llm_client import get_llm_config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

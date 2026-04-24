@@ -8,7 +8,7 @@ gradio>=4.0.0
 # Environment and Configuration
 python-dotenv>=1.0.0
 
-# HTTP requests for Jan.ai API
+# HTTP requests for LLM backend API
 requests>=2.31.0
 
 # Utilities

@@ -9,7 +9,7 @@ import logging
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agents import MultiAgentSystem
-from utils.jan_client import JanClient, JanClientError
+from utils.llm_client import LLMClient, LLMClientError
 
 # Configure logging so the user sees timestamps and levels in the terminal
 logging.basicConfig(
@@ -20,39 +20,39 @@ logging.basicConfig(
 logger = logging.getLogger("INSIDE-OUT")
 
 
-def check_jan_connection() -> bool:
+def check_llm_connection() -> bool:
     """
-    Attempt to reach the Jan AI server.
+    Attempt to reach the LLM backend server.
     Logs a clear warning when unavailable so the user knows
     all responses will be local / static fallbacks.
 
     Returns:
-        True if Jan AI is reachable, False otherwise.
+        True if LLM backend is reachable, False otherwise.
     """
     try:
-        client = JanClient()
+        client = LLMClient()
         connected = client.test_connection()
         if connected:
             logger.info(
-                f"✅ Jan AI connected — model: {client.model_name}  url: {client.base_url}"
+                f"✅ LLM backend connected — model: {client.model_name}  url: {client.base_url}"
             )
         else:
             logger.warning(
-                "⚠️  Jan AI server is NOT reachable at %s. "
+                "⚠️  LLM backend server is NOT reachable at %s. "
                 "All responses will use LOCAL static fallbacks (no LLM).",
                 client.base_url,
             )
         return connected
-    except JanClientError as exc:
+    except LLMClientError as exc:
         logger.warning(
-            "⚠️  Jan AI client error: %s. "
+            "⚠️  LLM backend client error: %s. "
             "All responses will use LOCAL static fallbacks (no LLM).",
             exc,
         )
         return False
     except Exception as exc:
         logger.warning(
-            "⚠️  Unexpected error checking Jan AI: %s. "
+            "⚠️  Unexpected error checking LLM backend: %s. "
             "All responses will use LOCAL static fallbacks (no LLM).",
             exc,
         )
@@ -93,11 +93,11 @@ def main():
     print_banner()
 
     # ── Connection check ────────────────────────────────────────────────────
-    jan_online = check_jan_connection()
-    if not jan_online:
+    llm_online = check_llm_connection()
+    if not llm_online:
         print(
-            "\n⚠️  Jan AI is OFFLINE — responses are LOCAL static fallbacks.\n"
-            "   Start the Jan AI server and restart this script for LLM replies.\n"
+            "\n⚠️  LLM backend is OFFLINE — responses are LOCAL static fallbacks.\n"
+            "   Start the LLM backend server and restart this script for LLM replies.\n"
         )
     # ────────────────────────────────────────────────────────────────────────
 

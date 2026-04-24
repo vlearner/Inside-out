@@ -1,6 +1,6 @@
 """
 Tests for Streamlit UI — AI Model Connection and Tool Selection
-Uses mocking to test without actual Jan AI server or running Streamlit.
+Uses mocking to test without actual LLM backend server or running Streamlit.
 """
 import os
 import sys
@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.jan_client import JanClient, JanClientError
+from utils.llm_client import LLMClient, LLMClientError
 
 # Import the helper under test (avoid importing streamlit at module level)
 # We import from ui.streamlit_app inside tests to allow patching.
@@ -34,9 +34,9 @@ MOCK_MODELS_RESPONSE = {
 class TestAIModelConnection:
     """Tests for the test_ai_model_connection helper function."""
 
-    @patch("ui.streamlit_app.JanClient")
+    @patch("ui.streamlit_app.LLMClient")
     def test_connection_success(self, mock_jan_cls):
-        """When Jan AI server is reachable, return connected=True."""
+        """When LLM backend server is reachable, return connected=True."""
         mock_client = MagicMock()
         mock_client.test_connection.return_value = True
         mock_client.model_name = "llama-3.1-8b-instruct"
@@ -52,7 +52,7 @@ class TestAIModelConnection:
         assert result["base_url"] == "http://localhost:1337/v1"
         assert result["error"] is None
 
-    @patch("ui.streamlit_app.JanClient")
+    @patch("ui.streamlit_app.LLMClient")
     def test_connection_server_not_responding(self, mock_jan_cls):
         """When server is not responding, return connected=False with message."""
         mock_client = MagicMock()
@@ -68,10 +68,10 @@ class TestAIModelConnection:
         assert result["connected"] is False
         assert result["error"] == "Server is not responding"
 
-    @patch("ui.streamlit_app.JanClient")
-    def test_connection_jan_client_error(self, mock_jan_cls):
-        """When JanClient raises JanClientError, return error details."""
-        mock_jan_cls.side_effect = JanClientError("Config missing")
+    @patch("ui.streamlit_app.LLMClient")
+    def test_connection_llm_client_error(self, mock_jan_cls):
+        """When LLMClient raises LLMClientError, return error details."""
+        mock_jan_cls.side_effect = LLMClientError("Config missing")
 
         from ui.streamlit_app import test_ai_model_connection
 
@@ -81,7 +81,7 @@ class TestAIModelConnection:
         assert "Config missing" in result["error"]
         assert result["model"] == "N/A"
 
-    @patch("ui.streamlit_app.JanClient")
+    @patch("ui.streamlit_app.LLMClient")
     def test_connection_unexpected_exception(self, mock_jan_cls):
         """When an unexpected exception occurs, return error details."""
         mock_jan_cls.side_effect = RuntimeError("Unexpected boom")
@@ -182,11 +182,11 @@ class TestParseMentions:
 
 
 # ============================================================================
-# JanClient.test_connection() Unit Tests (low-level)
+# LLMClient.test_connection() Unit Tests (low-level)
 # ============================================================================
 
-class TestJanClientTestConnection:
-    """Low-level tests for JanClient.test_connection()."""
+class TestLLMClientTestConnection:
+    """Low-level tests for LLMClient.test_connection()."""
 
     @patch("requests.get")
     def test_test_connection_success(self, mock_get):
@@ -197,8 +197,8 @@ class TestJanClientTestConnection:
         mock_response.json.return_value = MOCK_MODELS_RESPONSE
         mock_get.return_value = mock_response
 
-        with patch("utils.jan_client.load_dotenv"):
-            client = JanClient()
+        with patch("utils.llm_client.load_dotenv"):
+            client = LLMClient()
             assert client.test_connection() is True
 
     @patch("requests.get")
@@ -206,8 +206,8 @@ class TestJanClientTestConnection:
         """Connection error should return False."""
         mock_get.side_effect = ConnectionError("refused")
 
-        with patch("utils.jan_client.load_dotenv"):
-            client = JanClient()
+        with patch("utils.llm_client.load_dotenv"):
+            client = LLMClient()
             assert client.test_connection() is False
 
 
@@ -322,7 +322,7 @@ def run_ui_connection_tests():
 
     # --- test_ai_model_connection ---
     print("\n▶ Testing test_ai_model_connection — success case...")
-    with patch("ui.streamlit_app.JanClient") as mock_cls:
+    with patch("ui.streamlit_app.LLMClient") as mock_cls:
         mock_client = MagicMock()
         mock_client.test_connection.return_value = True
         mock_client.model_name = "test-model"
@@ -336,8 +336,8 @@ def run_ui_connection_tests():
     print("  ✅ Passed")
 
     print("▶ Testing test_ai_model_connection — failure case...")
-    with patch("ui.streamlit_app.JanClient") as mock_cls:
-        mock_cls.side_effect = JanClientError("No config")
+    with patch("ui.streamlit_app.LLMClient") as mock_cls:
+        mock_cls.side_effect = LLMClientError("No config")
         result = test_ai_model_connection()
         assert result["connected"] is False
         assert "No config" in result["error"]

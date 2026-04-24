@@ -22,7 +22,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests as req_lib
-from utils.jan_client import JanClient, LLMError
+from utils.llm_client import LLMClient, LLMError
 from agents.personality_agents import MultiAgentSystem, PersonalityAgent
 
 
@@ -30,16 +30,16 @@ from agents.personality_agents import MultiAgentSystem, PersonalityAgent
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_jan_client(**kwargs) -> JanClient:
-    """Create a JanClient with safe test overrides."""
+def _make_llm_client(**kwargs) -> LLMClient:
+    """Create a LLMClient with safe test overrides."""
     defaults = dict(
         base_url="http://localhost:1337/v1",
         api_key="test-key-not-real",
         model_name="test-model",
     )
     defaults.update(kwargs)
-    with patch("utils.jan_client.load_dotenv"):
-        return JanClient(**defaults)
+    with patch("utils.llm_client.load_dotenv"):
+        return LLMClient(**defaults)
 
 
 def _make_system() -> MultiAgentSystem:
@@ -59,17 +59,17 @@ class TestLLMErrorClassification:
         err = LLMError("server gone", error_type="connection_refused")
         assert str(err) == "[connection_refused] server gone"
 
-    def test_llm_error_is_jan_client_error(self):
-        """LLMError subclasses JanClientError for backwards compatibility."""
-        from utils.jan_client import JanClientError
+    def test_llm_error_is_llm_client_error(self):
+        """LLMError subclasses LLMClientError for backwards compatibility."""
+        from utils.llm_client import LLMClientError
         err = LLMError("oops", error_type="timeout")
-        assert isinstance(err, JanClientError)
+        assert isinstance(err, LLMClientError)
 
     @patch("requests.post")
     def test_connection_refused_raises_llm_error(self, mock_post):
         """ConnectionError → LLMError(error_type='connection_refused')."""
         mock_post.side_effect = req_lib.exceptions.ConnectionError("refused")
-        client = _make_jan_client()
+        client = _make_llm_client()
         with pytest.raises(LLMError) as exc_info:
             client._make_request([{"role": "user", "content": "hi"}], max_retries=1)
         assert exc_info.value.error_type == "connection_refused"
@@ -78,7 +78,7 @@ class TestLLMErrorClassification:
     def test_timeout_raises_llm_error(self, mock_post):
         """Timeout → LLMError(error_type='timeout')."""
         mock_post.side_effect = req_lib.exceptions.Timeout("timed out")
-        client = _make_jan_client()
+        client = _make_llm_client()
         with pytest.raises(LLMError) as exc_info:
             client._make_request([{"role": "user", "content": "hi"}], max_retries=1)
         assert exc_info.value.error_type == "timeout"
@@ -92,7 +92,7 @@ class TestLLMErrorClassification:
         mock_resp.raise_for_status.side_effect = http_err
         mock_post.return_value = mock_resp
 
-        client = _make_jan_client()
+        client = _make_llm_client()
         with pytest.raises(LLMError) as exc_info:
             client._make_request([{"role": "user", "content": "hi"}], max_retries=1)
         assert exc_info.value.error_type == "server_error"
@@ -106,7 +106,7 @@ class TestLLMErrorClassification:
         mock_resp.raise_for_status.side_effect = http_err
         mock_post.return_value = mock_resp
 
-        client = _make_jan_client()
+        client = _make_llm_client()
         with pytest.raises(LLMError) as exc_info:
             client._make_request([{"role": "user", "content": "hi"}], max_retries=3)
         assert exc_info.value.error_type == "client_error"
@@ -142,9 +142,9 @@ class TestDegradedPayload:
         mock_post.side_effect = req_lib.exceptions.ConnectionError("refused")
 
         system = _make_system()
-        # Give the system a real (but unreachable) JanClient so it tries
-        with patch.object(PersonalityAgent, "get_jan_client",
-                          return_value=_make_jan_client()):
+        # Give the system a real (but unreachable) LLMClient so it tries
+        with patch.object(PersonalityAgent, "get_llm_client",
+                          return_value=_make_llm_client()):
             with self._mock_monitor_approve():
                 with self._mock_decision_joy_only():
                     result = system.get_responses("What's your favourite colour?")
@@ -161,8 +161,8 @@ class TestDegradedPayload:
         mock_post.side_effect = req_lib.exceptions.Timeout("timed out")
 
         system = _make_system()
-        with patch.object(PersonalityAgent, "get_jan_client",
-                          return_value=_make_jan_client()):
+        with patch.object(PersonalityAgent, "get_llm_client",
+                          return_value=_make_llm_client()):
             with self._mock_monitor_approve():
                 with self._mock_decision_joy_only():
                     result = system.get_responses("What's your favourite colour?")
@@ -180,8 +180,8 @@ class TestDegradedPayload:
         mock_post.return_value = mock_resp
 
         system = _make_system()
-        with patch.object(PersonalityAgent, "get_jan_client",
-                          return_value=_make_jan_client()):
+        with patch.object(PersonalityAgent, "get_llm_client",
+                          return_value=_make_llm_client()):
             with self._mock_monitor_approve():
                 with self._mock_decision_joy_only():
                     result = system.get_responses("What's your favourite colour?")
@@ -201,8 +201,8 @@ class TestDegradedPayload:
         mock_post.return_value = mock_resp
 
         system = _make_system()
-        with patch.object(PersonalityAgent, "get_jan_client",
-                          return_value=_make_jan_client()):
+        with patch.object(PersonalityAgent, "get_llm_client",
+                          return_value=_make_llm_client()):
             with self._mock_monitor_approve():
                 with self._mock_decision_joy_only():
                     result = system.get_responses("What's your favourite colour?")
@@ -235,7 +235,7 @@ class TestDegradedPayload:
                 return_value={"joy": False, "sadness": False, "anger": False,
                               "fear": False, "disgust": False},
             ):
-                with patch.object(PersonalityAgent, "get_jan_client", return_value=None):
+                with patch.object(PersonalityAgent, "get_llm_client", return_value=None):
                     result = system.get_responses("Hello?")
 
         assert "degraded" in result

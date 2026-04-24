@@ -28,7 +28,7 @@ from agents.personality_agents import MultiAgentSystem, PersonalityAgent
 # ---------------------------------------------------------------------------
 
 def _make_system() -> MultiAgentSystem:
-    """Return a MultiAgentSystem without a real Jan client."""
+    """Return a MultiAgentSystem without a real LLM client."""
     system = MultiAgentSystem()
     return system
 
