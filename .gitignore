@@ -37,6 +37,9 @@ env/
 *.swp
 *.swo
 *~
+.streamlit/*
+!.streamlit/secrets.example.toml
+.*
 
 # OS
 .DS_Store

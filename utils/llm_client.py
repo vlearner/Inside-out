@@ -8,7 +8,7 @@ import time
 import json
 from typing import Dict, Optional, Any, List
 import requests
-from dotenv import load_dotenv
+from utils.config import get_secret
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -51,7 +51,7 @@ class LLMClient:
 
     # Default fallback values — override via env vars or constructor kwargs
     # NOTE: API keys are intentionally empty by default.
-    #       Set JAN_API_KEY / GROQ_API_KEY in your .env file (see .env.example).
+    #       Set JAN_API_KEY / GROQ_API_KEY in .streamlit/secrets.toml (see secrets.example.toml).
     DEFAULT_PROVIDER = "jan"
     SUPPORTED_PROVIDERS = {"jan", "groq"}
     DEFAULT_BASE_URL = "http://127.0.0.1:1337/v1"
@@ -80,12 +80,10 @@ class LLMClient:
 
             client = LLMClient(api_key="my-key", model_name="mistral-7b")
         """
-        load_dotenv()
-
         self.provider = (
             provider
             if provider is not None
-            else os.getenv("LLM_PROVIDER", self.DEFAULT_PROVIDER)
+            else get_secret("llm", "provider", "LLM_PROVIDER", self.DEFAULT_PROVIDER)
         ).strip().lower()
 
         if self.provider not in self.SUPPORTED_PROVIDERS:
@@ -95,13 +93,13 @@ class LLMClient:
             )
 
         if self.provider == "groq":
-            env_base_url = os.getenv("GROQ_BASE_URL", self.DEFAULT_GROQ_BASE_URL)
-            env_api_key = os.getenv("GROQ_API_KEY", self.DEFAULT_API_KEY)
-            env_model = os.getenv("GROQ_MODEL_NAME", self.DEFAULT_GROQ_MODEL)
+            env_base_url = get_secret("groq", "base_url", "GROQ_BASE_URL", self.DEFAULT_GROQ_BASE_URL)
+            env_api_key = get_secret("groq", "api_key", "GROQ_API_KEY", self.DEFAULT_API_KEY)
+            env_model = get_secret("groq", "model_name", "GROQ_MODEL_NAME", self.DEFAULT_GROQ_MODEL)
         else:
-            env_base_url = os.getenv("JAN_BASE_URL", self.DEFAULT_BASE_URL)
-            env_api_key = os.getenv("JAN_API_KEY", self.DEFAULT_API_KEY)
-            env_model = os.getenv("JAN_MODEL_NAME", self.DEFAULT_MODEL)
+            env_base_url = get_secret("jan", "base_url", "JAN_BASE_URL", self.DEFAULT_BASE_URL)
+            env_api_key = get_secret("jan", "api_key", "JAN_API_KEY", self.DEFAULT_API_KEY)
+            env_model = get_secret("jan", "model_name", "JAN_MODEL_NAME", self.DEFAULT_MODEL)
 
         self.base_url = (
             base_url
@@ -118,8 +116,8 @@ class LLMClient:
             if model_name is not None
             else env_model
         )
-        self.temperature = float(os.getenv("TEMPERATURE", "0.8"))
-        self.max_tokens = int(os.getenv("MAX_TOKENS", "500"))
+        self.temperature = float(get_secret("llm", "temperature", "TEMPERATURE", "0.8"))
+        self.max_tokens = int(get_secret("llm", "max_tokens", "MAX_TOKENS", "500"))
 
         self._validate_config()
         logger.info(
@@ -131,12 +129,12 @@ class LLMClient:
         """Validate that required configuration is present"""
         if not self.base_url:
             raise LLMClientError(
-                "LLM base URL not set. Please configure your .env file."
+                "LLM base URL not set. Please configure .streamlit/secrets.toml."
             )
         if self.provider == "groq" and not self.api_key:
             raise LLMClientError(
-                "GROQ_API_KEY not set while LLM_PROVIDER=groq. "
-                "Please configure your .env file."
+                "groq.api_key not set while provider=groq. "
+                "Please configure .streamlit/secrets.toml."
             )
         logger.debug("Configuration validated successfully")
 
@@ -316,20 +314,18 @@ def get_llm_config(
     Returns:
         Configuration dictionary for AutoGen agents
     """
-    load_dotenv()
-
-    provider = os.getenv("LLM_PROVIDER", LLMClient.DEFAULT_PROVIDER).strip().lower()
+    provider = get_secret("llm", "provider", "LLM_PROVIDER", LLMClient.DEFAULT_PROVIDER).strip().lower()
 
     if provider == "groq":
-        base_url = os.getenv("GROQ_BASE_URL", LLMClient.DEFAULT_GROQ_BASE_URL)
-        api_key = os.getenv("GROQ_API_KEY", "")
-        model_name = os.getenv("GROQ_MODEL_NAME", LLMClient.DEFAULT_GROQ_MODEL)
+        base_url = get_secret("groq", "base_url", "GROQ_BASE_URL", LLMClient.DEFAULT_GROQ_BASE_URL)
+        api_key = get_secret("groq", "api_key", "GROQ_API_KEY", "")
+        model_name = get_secret("groq", "model_name", "GROQ_MODEL_NAME", LLMClient.DEFAULT_GROQ_MODEL)
     else:
-        base_url = os.getenv("JAN_BASE_URL", LLMClient.DEFAULT_BASE_URL)
-        api_key = os.getenv("JAN_API_KEY", LLMClient.DEFAULT_API_KEY)
-        model_name = os.getenv("JAN_MODEL_NAME", LLMClient.DEFAULT_MODEL)
-    default_temp = float(os.getenv("TEMPERATURE", "0.8"))
-    default_max_tokens = int(os.getenv("MAX_TOKENS", "500"))
+        base_url = get_secret("jan", "base_url", "JAN_BASE_URL", LLMClient.DEFAULT_BASE_URL)
+        api_key = get_secret("jan", "api_key", "JAN_API_KEY", LLMClient.DEFAULT_API_KEY)
+        model_name = get_secret("jan", "model_name", "JAN_MODEL_NAME", LLMClient.DEFAULT_MODEL)
+    default_temp = float(get_secret("llm", "temperature", "TEMPERATURE", "0.8"))
+    default_max_tokens = int(get_secret("llm", "max_tokens", "MAX_TOKENS", "500"))
 
     config = {
         "config_list": [
@@ -356,9 +352,7 @@ def validate_environment() -> tuple[bool, str]:
     Returns:
         Tuple of (is_valid, message)
     """
-    load_dotenv()
-
-    provider = os.getenv("LLM_PROVIDER", LLMClient.DEFAULT_PROVIDER).strip().lower()
+    provider = get_secret("llm", "provider", "LLM_PROVIDER", LLMClient.DEFAULT_PROVIDER).strip().lower()
     if provider not in LLMClient.SUPPORTED_PROVIDERS:
         return (
             False,
@@ -366,27 +360,27 @@ def validate_environment() -> tuple[bool, str]:
         )
 
     if provider == "groq":
-        required_vars = ["GROQ_BASE_URL", "GROQ_API_KEY"]
-        optional_vars = ["GROQ_MODEL_NAME", "TEMPERATURE", "MAX_TOKENS"]
+        required_keys = [("groq", "base_url", "GROQ_BASE_URL"), ("groq", "api_key", "GROQ_API_KEY")]
+        optional_keys = [("groq", "model_name", "GROQ_MODEL_NAME"), ("llm", "temperature", "TEMPERATURE"), ("llm", "max_tokens", "MAX_TOKENS")]
     else:
-        required_vars = ["JAN_BASE_URL"]
-        optional_vars = ["JAN_API_KEY", "JAN_MODEL_NAME", "TEMPERATURE", "MAX_TOKENS"]
+        required_keys = [("jan", "base_url", "JAN_BASE_URL")]
+        optional_keys = [("jan", "api_key", "JAN_API_KEY"), ("jan", "model_name", "JAN_MODEL_NAME"), ("llm", "temperature", "TEMPERATURE"), ("llm", "max_tokens", "MAX_TOKENS")]
 
     missing = []
-    for var in required_vars:
-        if not os.getenv(var):
-            missing.append(var)
+    for section, key, env_var in required_keys:
+        if not get_secret(section, key, env_var):
+            missing.append(env_var)
 
     if missing:
-        return False, f"Missing required environment variables: {', '.join(missing)}"
+        return False, f"Missing required configuration: {', '.join(missing)}"
 
-    # Check for optional variables and provide info
+    # Check for optional keys and provide info
     warnings = []
-    for var in optional_vars:
-        if not os.getenv(var):
-            warnings.append(var)
+    for section, key, env_var in optional_keys:
+        if not get_secret(section, key, env_var):
+            warnings.append(env_var)
 
     if warnings:
         return True, f"Using defaults for: {', '.join(warnings)}"
 
-    return True, "All environment variables configured"
+    return True, "All configuration values set"

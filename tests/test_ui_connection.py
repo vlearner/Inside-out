@@ -197,18 +197,16 @@ class TestLLMClientTestConnection:
         mock_response.json.return_value = MOCK_MODELS_RESPONSE
         mock_get.return_value = mock_response
 
-        with patch("utils.llm_client.load_dotenv"):
-            client = LLMClient()
-            assert client.test_connection() is True
+        client = LLMClient()
+        assert client.test_connection() is True
 
     @patch("requests.get")
     def test_test_connection_failure(self, mock_get):
         """Connection error should return False."""
         mock_get.side_effect = ConnectionError("refused")
 
-        with patch("utils.llm_client.load_dotenv"):
-            client = LLMClient()
-            assert client.test_connection() is False
+        client = LLMClient()
+        assert client.test_connection() is False
 
 
 # ============================================================================

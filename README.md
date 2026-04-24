@@ -40,13 +40,15 @@ A fun multi-agent system inspired by Pixar's **Inside Out** movie, built with Au
    pip install -r requirements.txt
    ```
 
-3. **(Optional) Configure API keys**
+3. **Configure API keys**
    
-   If you want to use actual LLM responses (future enhancement), copy `.env.example` to `.env` and add your API key:
+   Copy the example secrets file and fill in your API keys:
    ```bash
-   cp .env.example .env
-   # Edit .env and add your OPENAI_API_KEY
+   cp .streamlit/secrets.example.toml .streamlit/secrets.toml
+   # Edit .streamlit/secrets.toml and add your API keys
    ```
+   
+   Set `[llm] provider` to `"groq"` for cloud (recommended) or `"jan"` for a local server.
 
 ### Running the Application
 
@@ -127,8 +129,10 @@ Inside-out/
 ├── main.py                      # CLI entry point
 ├── demo.py                      # Quick demo script
 ├── test_suite.py               # Comprehensive test suite
+├── .streamlit/
+│   ├── secrets.example.toml    # Example secrets configuration (copy to secrets.toml)
+│   └── secrets.toml            # Your secrets — never commit this file
 ├── requirements.txt             # Python dependencies
-├── .env.example                # Example environment configuration
 └── README.md                    # This file!
 ```
 

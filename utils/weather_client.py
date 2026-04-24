@@ -9,7 +9,7 @@ import re
 import time
 from typing import Dict, Optional, Any
 import requests
-from dotenv import load_dotenv
+from utils.config import get_secret
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -33,12 +33,10 @@ class WeatherClient:
     BASE_URL = "http://api.weatherapi.com/v1"
 
     def __init__(self):
-        """Initialize the Weather client with configuration from environment"""
-        load_dotenv()
-
-        self.api_key = os.getenv("WEATHER_API_KEY", "")
-        self.timeout = int(os.getenv("WEATHER_API_TIMEOUT", "10"))
-        self.max_retries = int(os.getenv("WEATHER_API_MAX_RETRIES", "3"))
+        """Initialize the Weather client with configuration from secrets/environment"""
+        self.api_key = get_secret("weather", "api_key", "WEATHER_API_KEY", "")
+        self.timeout = int(get_secret("weather", "timeout", "WEATHER_API_TIMEOUT", "10"))
+        self.max_retries = int(get_secret("weather", "max_retries", "WEATHER_API_MAX_RETRIES", "3"))
 
         self._validate_config()
         logger.info("WeatherClient initialized")
@@ -47,8 +45,8 @@ class WeatherClient:
         """Validate that required configuration is present"""
         if not self.api_key:
             logger.warning(
-                "WEATHER_API_KEY not set. Weather lookups will fail. "
-                "Please add your API key to the .env file."
+                "weather.api_key not set. Weather lookups will fail. "
+                "Please add your API key to .streamlit/secrets.toml."
             )
 
     def _sanitize_location(self, location: str) -> str:
@@ -102,8 +100,8 @@ class WeatherClient:
         """
         if not self.api_key:
             raise WeatherClientError(
-                "WEATHER_API_KEY not configured. "
-                "Please add your API key to the .env file."
+                "weather.api_key not configured. "
+                "Please add your API key to .streamlit/secrets.toml."
             )
 
         url = f"{self.BASE_URL}/{endpoint}"
@@ -282,11 +280,9 @@ def validate_weather_config() -> tuple[bool, str]:
     Returns:
         Tuple of (is_valid, message)
     """
-    load_dotenv()
-
-    api_key = os.getenv("WEATHER_API_KEY", "")
+    api_key = get_secret("weather", "api_key", "WEATHER_API_KEY", "")
 
     if not api_key:
-        return False, "WEATHER_API_KEY not set in environment"
+        return False, "weather.api_key not set in secrets.toml or WEATHER_API_KEY env var"
 
     return True, "Weather API configured"
