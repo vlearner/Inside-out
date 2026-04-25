@@ -309,6 +309,32 @@ class TestBuildFriendsJsPayload:
 
 
 # ============================================================================
+# is_debug_ui_enabled() Tests
+# ============================================================================
+
+class TestDebugUiToggle:
+    """Tests for UI debug-panel toggle config helper."""
+
+    @patch("ui.streamlit_app.get_secret")
+    def test_debug_toggle_true_boolean(self, mock_get_secret):
+        from ui.streamlit_app import is_debug_ui_enabled
+        mock_get_secret.return_value = True
+        assert is_debug_ui_enabled() is True
+
+    @patch("ui.streamlit_app.get_secret")
+    def test_debug_toggle_false_boolean(self, mock_get_secret):
+        from ui.streamlit_app import is_debug_ui_enabled
+        mock_get_secret.return_value = False
+        assert is_debug_ui_enabled() is False
+
+    @patch("ui.streamlit_app.get_secret")
+    def test_debug_toggle_string_true(self, mock_get_secret):
+        from ui.streamlit_app import is_debug_ui_enabled
+        mock_get_secret.return_value = "yes"
+        assert is_debug_ui_enabled() is True
+
+
+# ============================================================================
 # Runner (no pytest)
 # ============================================================================
 
