@@ -17,13 +17,31 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents import MultiAgentSystem
 from utils.llm_client import LLMClient, LLMClientError
+from utils.config import get_secret
+
+
+def is_debug_ui_enabled() -> bool:
+    """
+    Determine whether debug UI controls (sidebar) should be visible.
+
+    Read from [ui].debug_panel in ``.streamlit/secrets.toml``.
+    Env var INSIDEOUT_DEBUG_UI remains as fallback for CLI/tests.
+    """
+    raw_value = get_secret("ui", "debug_panel", "INSIDEOUT_DEBUG_UI", False)
+    if isinstance(raw_value, bool):
+        return raw_value
+
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+DEBUG_UI = is_debug_ui_enabled()
 
 # Page configuration
 st.set_page_config(
     page_title="🎭 Inside Out Friends Chat",
     page_icon="🎭",
     layout="centered",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded" if DEBUG_UI else "collapsed"
 )
 
 # ── Custom CSS for colored mentions, starters, and autocomplete ──
@@ -63,6 +81,11 @@ st.markdown("""
 /* Hide the iframe border for the custom input component */
 iframe[title="streamlit_app.html"] {
     border: none !important;
+}
+
+/* Hide sidebar for end users unless debug mode is enabled */
+[data-testid="stSidebar"] {
+    display: """ + ("block" if DEBUG_UI else "none") + """;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -281,80 +304,72 @@ def main():
     """Main Streamlit app with Decision Agent"""
     initialize_session_state()
     
-    # === SIDEBAR ===
-    with st.sidebar:
-        st.header("🎭 Friends in Chat")
-        st.write("Toggle who's online:")
-        
-        for emotion, config in EMOTION_FRIENDS.items():
-            st.session_state.active_friends[emotion] = st.checkbox(
-                f"{config['emoji']} {config['name']}",
-                value=st.session_state.active_friends[emotion],
-                key=f"toggle_{emotion}",
-                help=config['status']
-            )
-        
-        st.divider()
-        
-        if st.button("🗑️ Clear Chat", use_container_width=True):
-            st.session_state.messages = []
-            st.session_state.pending_responses = []
-            st.rerun()
-        
-        # --- Test AI Model Connection ---
-        if st.button("🔌 Test AI Model Connection", use_container_width=True):
-            with st.spinner("Testing connection to configured LLM backend..."):
-                status = test_ai_model_connection()
-            st.session_state.llm_connected = status["connected"]
-            if status["connected"]:
-                st.success(
-                    f"✅ Connected!\n\n"
-                    f"**Provider:** {status['provider']}\n\n"
-                    f"**Model:** {status['model']}\n\n"
-                    f"**URL:** {status['base_url']}"
+    # === SIDEBAR (Debug-only) ===
+    if DEBUG_UI:
+        with st.sidebar:
+            st.header("🛠️ Debug Panel")
+            st.caption("Set [ui].debug_panel=true in secrets.toml to keep this panel visible.")
+            st.divider()
+
+            st.subheader("🎭 Friends in Chat")
+            st.write("Toggle who's online:")
+
+            for emotion, config in EMOTION_FRIENDS.items():
+                st.session_state.active_friends[emotion] = st.checkbox(
+                    f"{config['emoji']} {config['name']}",
+                    value=st.session_state.active_friends[emotion],
+                    key=f"toggle_{emotion}",
+                    help=config['status']
                 )
+
+            st.divider()
+
+            if st.button("🗑️ Clear Chat", use_container_width=True):
+                st.session_state.messages = []
+                st.session_state.pending_responses = []
                 st.rerun()
-            else:
-                st.error(
-                    f"❌ Connection failed\n\n"
-                    f"**Error:** {status['error']}\n\n"
-                    f"Check your LLM provider configuration and connectivity."
+
+            # --- Test AI Model Connection ---
+            if st.button("🔌 Test AI Model Connection", use_container_width=True):
+                with st.spinner("Testing connection to configured LLM backend..."):
+                    status = test_ai_model_connection()
+                st.session_state.llm_connected = status["connected"]
+                if status["connected"]:
+                    st.success(
+                        f"✅ Connected!\n\n"
+                        f"**Provider:** {status['provider']}\n\n"
+                        f"**Model:** {status['model']}\n\n"
+                        f"**URL:** {status['base_url']}"
+                    )
+                    st.rerun()
+                else:
+                    st.error(
+                        f"❌ Connection failed\n\n"
+                        f"**Error:** {status['error']}\n\n"
+                        f"Check your LLM provider configuration and connectivity."
+                    )
+
+            st.divider()
+
+            # --- Tools Section ---
+            st.subheader("🛠️ Tools")
+            st.write("Enable/disable agent tools:")
+
+            for tool_key, tool_config in AVAILABLE_TOOLS.items():
+                st.session_state.enabled_tools[tool_key] = st.checkbox(
+                    f"{tool_config['emoji']} {tool_config['name']}",
+                    value=st.session_state.enabled_tools.get(tool_key, True),
+                    key=f"tool_{tool_key}",
+                    help=tool_config["description"],
                 )
 
-        st.divider()
-
-        # --- Tools Section ---
-        st.subheader("🛠️ Tools")
-        st.write("Enable/disable agent tools:")
-
-        for tool_key, tool_config in AVAILABLE_TOOLS.items():
-            st.session_state.enabled_tools[tool_key] = st.checkbox(
-                f"{tool_config['emoji']} {tool_config['name']}",
-                value=st.session_state.enabled_tools.get(tool_key, True),
-                key=f"tool_{tool_key}",
-                help=tool_config["description"],
-            )
-
-        # Show tool connection status when a tool is enabled
-        for tool_key, enabled in st.session_state.enabled_tools.items():
-            if enabled:
+            # Show tool connection status when a tool is enabled
+            for tool_key, enabled in st.session_state.enabled_tools.items():
                 tool_config = AVAILABLE_TOOLS[tool_key]
-                st.caption(f"  ↳ {tool_config['emoji']} {tool_config['name']} — active")
-            else:
-                tool_config = AVAILABLE_TOOLS[tool_key]
-                st.caption(f"  ↳ {tool_config['emoji']} {tool_config['name']} — disabled")
-
-        st.divider()
-        st.subheader("💬 How to Chat")
-        st.markdown("""
-        **Direct message:**
-        `@joy What's fun today?`
-        
-        **Ask the group:**
-        Type without @ and the Decision Agent picks who responds!
-        
-        🧠 *Smart routing - not everyone responds to everything!*
-        """)
+                if enabled:
+                    st.caption(f"  ↳ {tool_config['emoji']} {tool_config['name']} — active")
+                else:
+                    st.caption(f"  ↳ {tool_config['emoji']} {tool_config['name']} — disabled")
     
     # === MAIN CONTENT ===
     st.title("🎭 Inside Out Friends Chat")
