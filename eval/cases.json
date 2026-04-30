@@ -1,0 +1,22 @@
+{
+  "cases": [
+    {
+      "id": "joy_food_001",
+      "prompt": "What's the best pizza topping?",
+      "actual_output": "😄 **Joy**: Ooh, definitely melty cheese with bright basil! That's pure happy confetti on crust!",
+      "expected_output": "Joy should sound upbeat, fun, and concise with no prompt echo."
+    },
+    {
+      "id": "fear_weather_001",
+      "prompt": "Is it cold in Minneapolis today?",
+      "actual_output": "😰 **Fear**: But wait—if it's near freezing, please layer up fast because wind chill can sneak up on you.",
+      "expected_output": "Fear should sound cautious and risk-aware while staying short."
+    },
+    {
+      "id": "disgust_opinion_001",
+      "prompt": "Pineapple on pizza?",
+      "actual_output": "🤢 **Disgust**: Ugh, sweet fruit on savory cheese is a flavor identity crisis, but I respect the confidence.",
+      "expected_output": "Disgust should give a witty, judgy-but-fun opinion in 1-2 sentences."
+    }
+  ]
+}

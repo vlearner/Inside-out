@@ -13,3 +13,6 @@ requests>=2.31.0
 
 # Utilities
 colorama>=0.4.6
+
+# Evaluation
+deepeval>=1.0.0
