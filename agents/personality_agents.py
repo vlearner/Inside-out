@@ -135,7 +135,7 @@ class PersonalityAgent:
 
         return cls._llm_client
     
-    def __init__(self, personality_type: str, enabled: bool = True):
+    def __init__(self, personality_type: str, enabled: bool = True, session_memory: Optional[list] = None, agent_memory: Optional[dict] = None):
         self.personality_type = personality_type
         self.config = PERSONALITY_PROMPTS.get(personality_type, {})
         self.name = self.config.get("name", personality_type.capitalize())
@@ -143,11 +143,13 @@ class PersonalityAgent:
         self.color = self.config.get("color", "white")
         self.system_prompt = self.config.get("system_prompt", "")
         self.enabled = enabled
+        self.session_memory = session_memory if session_memory is not None else []
+        self.agent_memory = agent_memory if agent_memory is not None else {}
         # Degraded-mode state — set by get_response() when LLM falls back
         self._degraded: bool = False
         self._degraded_reason: str = ""
     
-    def get_response(self, question: str, llm_config: Optional[Dict] = None, corrective_hint: str = "", history: Optional[list] = None) -> str:
+    def get_response(self, question: str, llm_config: Optional[Dict] = None, corrective_hint: str = "", history: Optional[list] = None, agent_memory: Optional[dict] = None) -> str:
         """
         Generate a response based on this personality using LLM backend.
         Falls back to static response if LLM backend is unavailable.
@@ -193,7 +195,10 @@ class PersonalityAgent:
             logger.info(f"── {tag} Step 2 — Not a weather query (skipping weather tool)")
 
         # ── Step 3: Build prompt ─────────────────────────────────────────────
+        memory_context = agent_memory if agent_memory is not None else self.agent_memory
         user_message = f'User says: "{clean_question}"'
+        if memory_context:
+            user_message += f"\n\nKnown user preferences: {json.dumps(memory_context)}"
         if weather_context:
             user_message += weather_context
             user_message += (

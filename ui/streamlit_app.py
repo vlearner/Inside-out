@@ -17,6 +17,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents import MultiAgentSystem
 from utils.llm_client import LLMClient, LLMClientError
+from memory.memory_utils import (
+    initialize_session_memory, initialize_agent_memory, add_to_session_memory,
+    update_agent_memory, get_session_memory, get_agent_memory,
+    clear_session_memory, clear_agent_memory
+)
+from ui.js_utils import inject_browser_memory_bootstrap, sync_memory_with_browser
 
 # Page configuration
 st.set_page_config(
@@ -260,6 +266,8 @@ def initialize_session_state():
     if "llm_connected" not in st.session_state:
         status = test_ai_model_connection()
         st.session_state.llm_connected = status["connected"]
+    if "memory_enabled" not in st.session_state:
+        st.session_state.memory_enabled = True
 
 
 def get_single_response(agent_system, emotion: str, message: str):
@@ -279,7 +287,10 @@ def get_single_response(agent_system, emotion: str, message: str):
 
 def main():
     """Main Streamlit app with Decision Agent"""
+    inject_browser_memory_bootstrap()
     initialize_session_state()
+    initialize_session_memory()
+    initialize_agent_memory()
     
     # === SIDEBAR ===
     with st.sidebar:
@@ -294,6 +305,13 @@ def main():
                 help=config['status']
             )
         
+        st.divider()
+        st.subheader("🧠 Memory")
+        st.session_state.memory_enabled = st.checkbox("Enable memory", value=st.session_state.get("memory_enabled", True))
+        if st.button("♻️ Reset Memory", use_container_width=True):
+            clear_session_memory()
+            clear_agent_memory()
+            st.rerun()
         st.divider()
         
         if st.button("🗑️ Clear Chat", use_container_width=True):
@@ -446,6 +464,8 @@ def main():
         typing_placeholder.empty()
         
         if response_text:
+            if st.session_state.get("memory_enabled", True):
+                add_to_session_memory("agent", response_text, agent=config["name"])
             st.session_state.messages.append({
                 "role": "friend",
                 "emotion": emotion,
@@ -679,6 +699,9 @@ def main():
         )
 
     if user_input:
+        if st.session_state.memory_enabled:
+            add_to_session_memory("user", user_input)
+            update_agent_memory(user_input)
 
         # Add user message
         st.session_state.messages.append({
@@ -687,6 +710,8 @@ def main():
         })
         
         agent_system = st.session_state.agent_system
+        for agent in agent_system.agents.values():
+            agent.agent_memory = get_agent_memory()
         
         # Update agent states
         for emotion, active in st.session_state.active_friends.items():
@@ -745,8 +770,9 @@ def main():
         
         # Sort: mentioned first, then by delay
         pending.sort(key=lambda x: (0 if x["was_mentioned"] else 1, x["delay"]))
-        
+
         st.session_state.pending_responses = pending
+        sync_memory_with_browser(get_session_memory(), get_agent_memory())
         st.rerun()
     
     # Footer
